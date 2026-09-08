@@ -264,7 +264,7 @@ export default function App() {
   // Обновление бейджа NEW, пока открыта вкладка мониторинга.
   useEffect(() => {
     if (tab !== "monitor") return;
-    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    const id = setInterval(() => setNowTick(Date.now()), 10000);
     return () => clearInterval(id);
   }, [tab]);
 
@@ -585,9 +585,38 @@ export default function App() {
                 <div className="rule-lists">
                   <div className="rule-col" style={{ flex: "1 1 100%" }}>
                     {hostGroups.map((g) => {
-                      const isNew = nowTick - g.firstSeen < 5 * 60 * 1000;
+                      const ageMs = nowTick - g.firstSeen;
+                      // NEW: зелёный — младше 60 сек, оранжевый — от 60 сек до 5 мин,
+                      // старше 5 мин — бейдж скрывается.
+                      const newTone =
+                        ageMs < 60 * 1000
+                          ? "green"
+                          : ageMs < 5 * 60 * 1000
+                            ? "orange"
+                            : null;
                       return (
                         <div className="rule-row" key={g.host}>
+                          {newTone && (
+                            <span
+                              title={`Сайт впервые открыт ${new Date(g.firstSeen).toLocaleTimeString("ru-RU")}`}
+                              style={{
+                                fontSize: 11,
+                                fontWeight: 700,
+                                padding: "2px 6px",
+                                borderRadius: 6,
+                                flexShrink: 0,
+                                color:
+                                  newTone === "green" ? "#4ade80" : "#fb923c",
+                                background:
+                                  newTone === "green"
+                                    ? "rgba(34,197,94,.15)"
+                                    : "rgba(249,115,22,.15)",
+                                border: `1px solid ${newTone === "green" ? "rgba(34,197,94,.4)" : "rgba(249,115,22,.4)"}`,
+                              }}
+                            >
+                              NEW
+                            </span>
+                          )}
                           <span
                             title={`Первое: ${new Date(g.firstSeen).toLocaleString("ru-RU")}\nПоследнее: ${new Date(g.lastSeen).toLocaleString("ru-RU")}`}
                             style={{ minWidth: 70 }}
@@ -612,14 +641,6 @@ export default function App() {
                               style={{ fontSize: 12, opacity: 0.7 }}
                             >
                               ×{g.count}
-                            </span>
-                          )}
-                          {isNew && (
-                            <span
-                              className="preset-state on"
-                              title="Сайт впервые открыт за последние 5 минут"
-                            >
-                              NEW
                             </span>
                           )}
                           {g.process && (
