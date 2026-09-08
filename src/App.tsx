@@ -83,10 +83,13 @@ export default function App() {
   const [elapsed, setElapsed] = useState(0);
   // Журнал соединений для вкладки мониторинга: время первого обращения + сайт.
   const [connLog, setConnLog] = useState<
-    { conn: ConnectionInfo; firstSeen: number }[]
+    { conn: ConnectionInfo; firstSeen: number; lastSeen: number }[]
   >([]);
-  const [activeIds, setActiveIds] = useState<string[]>([]);
+  const [activeList, setActiveList] = useState<ConnectionInfo[]>([]);
   const [onlyVpn, setOnlyVpn] = useState(true);
+  const [search, setSearch] = useState("");
+  // Тикающие часы, чтобы бейдж NEW гас через 5 минут без новых данных.
+  const [nowTick, setNowTick] = useState(Date.now());
   const seenRef = useRef<Map<string, number>>(new Map());
 
   const mergeConnections = useCallback((list: ConnectionInfo[]) => {
@@ -95,11 +98,15 @@ export default function App() {
     for (const c of list) {
       if (!seen.has(c.id)) seen.set(c.id, now);
     }
-    setActiveIds(list.map((c) => c.id));
+    setActiveList(list);
     setConnLog((prev) => {
       const byId = new Map(prev.map((e) => [e.conn.id, e]));
       for (const c of list) {
-        byId.set(c.id, { conn: c, firstSeen: seen.get(c.id) ?? now });
+        byId.set(c.id, {
+          conn: c,
+          firstSeen: seen.get(c.id) ?? now,
+          lastSeen: now,
+        });
       }
       const all = [...byId.values()].sort((a, b) => b.firstSeen - a.firstSeen);
       if (all.length > 200) {
@@ -113,8 +120,66 @@ export default function App() {
   const clearConnLog = useCallback(() => {
     seenRef.current.clear();
     setConnLog([]);
-    setActiveIds([]);
+    setActiveList([]);
   }, []);
+
+  interface HostGroup {
+    host: string;
+    count: number;
+    firstSeen: number;
+    lastSeen: number;
+    active: boolean;
+    process?: string | null;
+    viaProxy: boolean;
+    destination: string;
+  }
+
+  // Группировка записей по сайтам: один сайт — одна строка.
+  const hostGroups = useMemo(() => {
+    const activeHosts = new Set(activeList.map((c) => c.host));
+    const q = search.trim().toLowerCase();
+    const map = new Map<string, HostGroup>();
+    for (const e of connLog) {
+      if (onlyVpn && !e.conn.viaProxy) continue;
+      if (
+        q &&
+        !e.conn.host.toLowerCase().includes(q) &&
+        !(e.conn.process ?? "").toLowerCase().includes(q)
+      ) {
+        continue;
+      }
+      const g = map.get(e.conn.host);
+      if (g) {
+        g.count += 1;
+        g.firstSeen = Math.min(g.firstSeen, e.firstSeen);
+        if (e.lastSeen >= g.lastSeen) {
+          g.lastSeen = e.lastSeen;
+          g.process = e.conn.process;
+          g.viaProxy = e.conn.viaProxy;
+          g.destination = e.conn.destination;
+        }
+      } else {
+        map.set(e.conn.host, {
+          host: e.conn.host,
+          count: 1,
+          firstSeen: e.firstSeen,
+          lastSeen: e.lastSeen,
+          active: false,
+          process: e.conn.process,
+          viaProxy: e.conn.viaProxy,
+          destination: e.conn.destination,
+        });
+      }
+    }
+    const groups = [...map.values()];
+    for (const g of groups) g.active = activeHosts.has(g.host);
+    // сначала активные, затем по времени последнего обращения
+    groups.sort(
+      (a, b) =>
+        Number(b.active) - Number(a.active) || b.lastSeen - a.lastSeen,
+    );
+    return groups;
+  }, [connLog, activeList, onlyVpn, search]);
 
   useEffect(() => {
     if (!state || !state.status.connected || !state.connectedSince) {
@@ -193,8 +258,15 @@ export default function App() {
 
   // После отключения активных соединений нет.
   useEffect(() => {
-    if (!state?.status.connected) setActiveIds([]);
+    if (!state?.status.connected) setActiveList([]);
   }, [state?.status.connected]);
+
+  // Обновление бейджа NEW, пока открыта вкладка мониторинга.
+  useEffect(() => {
+    if (tab !== "monitor") return;
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, [tab]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -471,6 +543,13 @@ export default function App() {
                 : "Подключите VPN во вкладке «Подключение», чтобы видеть запросы в реальном времени."}
             </p>
             <div className="rule-form">
+              <input
+                className="input"
+                placeholder="Найти сайт или процесс…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ minWidth: 200 }}
+              />
               <label className="sub-check">
                 <input
                   type="checkbox"
@@ -479,42 +558,44 @@ export default function App() {
                 />
                 <span>только через VPN</span>
               </label>
-              <span style={{ fontSize: 12, opacity: 0.75 }}>
-                Активно сейчас: {activeIds.length} · В журнале: {connLog.length}
-              </span>
               <button className="btn ghost" onClick={clearConnLog}>
                 Очистить журнал
               </button>
             </div>
+            <div style={{ fontSize: 12, opacity: 0.75, margin: "8px 0" }}>
+              Активно сейчас: {activeList.length} · Сайтов в журнале:{" "}
+              {hostGroups.length}
+            </div>
             {(() => {
-              const rows = connLog.filter((e) => !onlyVpn || e.conn.viaProxy);
-              if (!connected && rows.length === 0) {
+              if (!connected && hostGroups.length === 0) {
                 return <p className="empty">Нет данных — VPN отключён</p>;
               }
-              if (rows.length === 0) {
+              if (hostGroups.length === 0) {
                 return (
                   <p className="empty">
-                    {onlyVpn
-                      ? "Пока нет запросов через VPN — откройте сайт из правил"
-                      : "Пока нет запросов — откройте любой сайт"}
+                    {search.trim()
+                      ? `По запросу «${search.trim()}» ничего не найдено`
+                      : onlyVpn
+                        ? "Пока нет запросов через VPN — откройте сайт из правил"
+                        : "Пока нет запросов — откройте любой сайт"}
                   </p>
                 );
               }
               return (
                 <div className="rule-lists">
                   <div className="rule-col" style={{ flex: "1 1 100%" }}>
-                    {rows.map(({ conn, firstSeen }) => {
-                      const active = activeIds.includes(conn.id);
+                    {hostGroups.map((g) => {
+                      const isNew = nowTick - g.firstSeen < 5 * 60 * 1000;
                       return (
-                        <div className="rule-row" key={conn.id}>
+                        <div className="rule-row" key={g.host}>
                           <span
-                            title={new Date(firstSeen).toLocaleString("ru-RU")}
+                            title={`Первое: ${new Date(g.firstSeen).toLocaleString("ru-RU")}\nПоследнее: ${new Date(g.lastSeen).toLocaleString("ru-RU")}`}
                             style={{ minWidth: 70 }}
                           >
-                            {new Date(firstSeen).toLocaleTimeString("ru-RU")}
+                            {new Date(g.lastSeen).toLocaleTimeString("ru-RU")}
                           </span>
                           <span
-                            title={conn.destination}
+                            title={g.destination}
                             style={{
                               flex: 1,
                               overflow: "hidden",
@@ -522,21 +603,37 @@ export default function App() {
                               whiteSpace: "nowrap",
                             }}
                           >
-                            {active ? "● " : "○ "}
-                            {conn.host}
+                            {g.active ? "● " : "○ "}
+                            {g.host}
                           </span>
-                          {conn.process && (
+                          {g.count > 1 && (
                             <span
-                              title={`Процесс: ${conn.process}`}
+                              title={`Обращений: ${g.count}`}
                               style={{ fontSize: 12, opacity: 0.7 }}
                             >
-                              {conn.process}
+                              ×{g.count}
+                            </span>
+                          )}
+                          {isNew && (
+                            <span
+                              className="preset-state on"
+                              title="Сайт впервые открыт за последние 5 минут"
+                            >
+                              NEW
+                            </span>
+                          )}
+                          {g.process && (
+                            <span
+                              title={`Процесс: ${g.process}`}
+                              style={{ fontSize: 12, opacity: 0.7 }}
+                            >
+                              {g.process}
                             </span>
                           )}
                           <span
-                            className={`preset-state ${conn.viaProxy ? "on" : "off"}`}
+                            className={`preset-state ${g.viaProxy ? "on" : "off"}`}
                           >
-                            {conn.viaProxy ? "VPN" : "напрямую"}
+                            {g.viaProxy ? "VPN" : "напрямую"}
                           </span>
                         </div>
                       );
