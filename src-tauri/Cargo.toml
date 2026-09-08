@@ -1,0 +1,40 @@
+[package]
+name = "custom-vpn"
+version = "0.1.0"
+description = "Custom VPN client (VLESS / sing-box)"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "custom_vpn_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# production builds must serve the frontend from embedded assets (tauri://localhost)
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+url = "2"
+percent-encoding = "2"
+regex = "1"
+ureq = { version = "3", default-features = false, features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+winreg = "0.55"
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Threading",
+  "Win32_Networking_WinInet",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
