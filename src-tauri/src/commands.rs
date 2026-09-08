@@ -214,6 +214,11 @@ pub fn get_connections(core: State<'_, Arc<Core>>) -> Vec<crate::models::Connect
 }
 
 #[tauri::command]
+pub fn cleanup_orphans(core: State<'_, Arc<Core>>) {
+    core.cleanup_orphans();
+}
+
+#[tauri::command]
 pub fn get_opencode_proxy_env(core: State<'_, Arc<Core>>) -> bool {
     let port = core.app_config().settings.mixed_port;
     crate::winutil::get_opencode_proxy_env_status(port)

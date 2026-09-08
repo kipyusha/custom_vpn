@@ -355,6 +355,15 @@ export default function App() {
     setUpdateProgress(0);
     setUpdateMsg(null);
     try {
+      // Отключаем VPN и прибиваем остатки sing-box, чтобы установщик
+      // не спотыкался о занятые файлы.
+      try {
+        await api.disconnect();
+      } catch {}
+      try {
+        await api.cleanupOrphans();
+      } catch {}
+      await refresh();
       await update.downloadAndInstall((ev) => {
         if (ev.event === "Started") {
           dlRef.current = { done: 0, total: ev.data.contentLength ?? 0 };
@@ -374,7 +383,7 @@ export default function App() {
       setUpdateMsg(`Ошибка установки обновления: ${String(e)}`);
       setUpdateProgress(null);
     }
-  }, [update]);
+  }, [update, refresh]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);

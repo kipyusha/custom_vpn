@@ -57,6 +57,11 @@ impl SingBox {
             );
         }
         self.stop_inner();
+        // Прибиваем осиротевшие sing-box от прошлых запусков (например,
+        // после обновления через установщик): они держат файлы занятыми
+        // и мешают установке/перезапуску. Узнаём свои по пути конфига
+        // в командной строке, чужие процессы не трогаем.
+        kill_orphans(&self.config_path);
 
         fs::create_dir_all(&self.data_dir).map_err(|e| format!("Ошибка каталога данных: {e}"))?;
         let mut cfg = cfg.clone();
@@ -112,6 +117,12 @@ impl SingBox {
         let _ = winutil::clear_system_proxy();
     }
 
+    /// Прибивает осиротевшие процессы с нашим конфигом (для вызова
+    /// извне, например перед установкой обновления).
+    pub fn kill_stale(&self) {
+        kill_orphans(&self.config_path);
+    }
+
     fn stop_inner(&self) {
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
@@ -162,8 +173,25 @@ fn ensure_dlls(bin_dir: &Path, resource_dir: &Path) {
     }
 }
 
-fn read_tail(path: &Path) -> Option<String> {
-    let raw = fs::read_to_string(path).ok()?;
+/// Завершает процессы sing-box.exe, запущенные с нашим конфигом
+/// (остатки прошлых запусков/обновлений). Чужие процессы не трогает.
+#[cfg(windows)]
+fn kill_orphans(config_path: &Path) {
+    let pattern = format!("*{}*", config_path.to_string_lossy());
+    let script = format!(
+        "Get-CimInstance Win32_Process -Filter \"Name = 'sing-box.exe'\" \
+         | Where-Object {{ $_.CommandLine -like '{pattern}' }} \
+         | ForEach-Object {{ try {{ Stop-Process -Id $_.ProcessId -Force }} catch {{}} }}"
+    );
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output();
+}
+
+#[cfg(not(windows))]
+fn kill_orphans(_config_path: &Path) {}
+
+fn read_tail(path: &Path) -> Option<String> {    let raw = fs::read_to_string(path).ok()?;
     let lines: Vec<&str> = raw.lines().collect();
     let start = lines.len().saturating_sub(30);
     Some(lines[start..].join("\n"))

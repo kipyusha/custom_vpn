@@ -64,6 +64,7 @@ pub fn run() {
             commands::get_status,
             commands::get_ping,
             commands::get_connections,
+            commands::cleanup_orphans,
             commands::get_opencode_proxy_env,
             commands::set_opencode_proxy_env,
             commands::clear_opencode_proxy_env,

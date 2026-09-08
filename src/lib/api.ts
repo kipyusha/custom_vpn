@@ -147,6 +147,7 @@ export const api = {
   onPing: (cb: (p: PingInfo) => void) =>
     listen<PingInfo>("ping", (e) => cb(e.payload)),
   getConnections: (): Promise<ConnectionInfo[]> => invoke("get_connections"),
+  cleanupOrphans: (): Promise<void> => invoke("cleanup_orphans"),
   onConnections: (cb: (list: ConnectionInfo[]) => void) =>
     listen<ConnectionInfo[]>("connections", (e) => cb(e.payload)),
   getOpencodeProxyEnv: (): Promise<boolean> => invoke("get_opencode_proxy_env"),

@@ -418,6 +418,11 @@ impl Core {
         self.connections.lock().unwrap().clone()
     }
 
+    /// Завершает осиротевшие sing-box с нашим конфигом.
+    pub fn cleanup_orphans(&self) {
+        self.singbox.kill_stale();
+    }
+
     /// Время начала подключения в unix-миллисекундах (None, если не подключено).
     pub fn connected_since_ms(&self) -> Option<u64> {
         self.connected_at
