@@ -344,9 +344,11 @@ export default function App() {
     }
   }, []);
 
-  // Проверка обновлений при старте приложения.
+  // Проверка обновлений при старте приложения и далее каждые 6 часов.
   useEffect(() => {
     checkForUpdates(false);
+    const id = setInterval(() => checkForUpdates(false), 6 * 60 * 60 * 1000);
+    return () => clearInterval(id);
   }, [checkForUpdates]);
 
   const installUpdate = useCallback(async () => {
@@ -427,7 +429,11 @@ export default function App() {
     if (state?.status.connected) {
       run(() => api.disconnect());
     } else {
-      run(() => api.connect());
+      // После подключения сеть меняется — перепроверяем обновления.
+      run(async () => {
+        await api.connect();
+        checkForUpdates(false);
+      });
     }
   };
 
@@ -675,34 +681,64 @@ export default function App() {
         </div>
       )}
       {update && !updateDismissed && updateProgress === null && (
-        <div className="banner ok">
-          <span>
-            Доступно обновление до версии {update.version}
+        <div
+          onClick={() => setUpdateDismissed(true)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 100,
+            padding: 24,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "var(--bg-card, #1a1f2e)",
+              border: "1px solid var(--border)",
+              borderRadius: 12,
+              padding: 24,
+              maxWidth: 480,
+              width: "100%",
+              boxShadow: "0 12px 48px rgba(0,0,0,.5)",
+            }}
+          >
+            <h2 style={{ margin: "0 0 8px" }}>Вышла новая версия</h2>
+            <p style={{ margin: "0 0 12px", opacity: 0.85 }}>
+              Доступно обновление до версии <b>{update.version}</b>.
+              Рекомендуем установить.
+            </p>
             {update.body && (
-              <details style={{ marginTop: 6, fontWeight: "normal" }}>
-                <summary style={{ cursor: "pointer" }}>
-                  Что нового
-                </summary>
-                <pre
-                  style={{
-                    whiteSpace: "pre-wrap",
-                    fontSize: 12,
-                    maxHeight: 120,
-                    overflowY: "auto",
-                    marginTop: 6,
-                  }}
-                >
-                  {update.body}
-                </pre>
-              </details>
+              <pre
+                style={{
+                  whiteSpace: "pre-wrap",
+                  fontSize: 12,
+                  maxHeight: 140,
+                  overflowY: "auto",
+                  background: "rgba(255,255,255,.05)",
+                  borderRadius: 8,
+                  padding: 10,
+                  margin: "0 0 16px",
+                }}
+              >
+                {update.body}
+              </pre>
             )}
-          </span>
-          <span style={{ display: "flex", gap: 8 }}>
-            <button className="btn primary" onClick={installUpdate}>
-              Обновить
-            </button>
-            <button onClick={() => setUpdateDismissed(true)}>Позже</button>
-          </span>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                className="btn ghost"
+                onClick={() => setUpdateDismissed(true)}
+              >
+                Позже
+              </button>
+              <button className="btn primary" onClick={installUpdate}>
+                Установить обновление
+              </button>
+            </div>
+          </div>
         </div>
       )}
       {updateProgress !== null && (
