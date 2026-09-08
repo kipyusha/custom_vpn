@@ -53,6 +53,7 @@ pub fn run() {
             commands::set_custom_site_include_subdomains,
             commands::get_status,
             commands::get_ping,
+            commands::get_connections,
             commands::get_opencode_proxy_env,
             commands::set_opencode_proxy_env,
             commands::clear_opencode_proxy_env,

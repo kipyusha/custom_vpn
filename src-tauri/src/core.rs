@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::clash::{spawn_traffic_thread, ClashClient};
 use crate::config;
-use crate::models::{AppConfig, PingInfo, Profile, StatusInfo};
+use crate::models::{AppConfig, ConnectionInfo, PingInfo, Profile, StatusInfo};
 use crate::ping;
 use crate::singbox::SingBox;
 use crate::store::Store;
@@ -30,6 +30,7 @@ pub struct Core {
     status: Mutex<StatusInfo>,
     ping: Mutex<PingInfo>,
     traffic: Mutex<TrafficState>,
+    connections: Mutex<Vec<ConnectionInfo>>,
     server: Mutex<Option<(String, u16)>>,
     connected_at: Mutex<Option<std::time::SystemTime>>,
     workers: Mutex<Option<Workers>>,
@@ -52,6 +53,7 @@ impl Core {
             status: Mutex::new(StatusInfo::default()),
             ping: Mutex::new(PingInfo::default()),
             traffic: Mutex::new(TrafficState::default()),
+            connections: Mutex::new(Vec::new()),
             server: Mutex::new(server),
             connected_at: Mutex::new(None),
             workers: Mutex::new(None),
@@ -394,6 +396,7 @@ impl Core {
         self.singbox.stop();
         *self.connected_at.lock().unwrap() = None;
         *self.status.lock().unwrap() = StatusInfo::default();
+        self.connections.lock().unwrap().clear();
         self.emit_status(app);
     }
 
@@ -408,6 +411,11 @@ impl Core {
     pub fn get_traffic(&self) -> (u64, u64) {
         let t = self.traffic.lock().unwrap();
         (t.up_speed, t.down_speed)
+    }
+
+    /// Последний снимок активных соединений (обновляется фоновым потоком).
+    pub fn get_connections(&self) -> Vec<ConnectionInfo> {
+        self.connections.lock().unwrap().clone()
     }
 
     /// Время начала подключения в unix-миллисекундах (None, если не подключено).
@@ -443,6 +451,22 @@ impl Core {
                 let _ = app_t.emit("traffic", json!({ "up": up, "down": down }));
             },
         ));
+
+        // соединения (для вкладки мониторинга)
+        let core = self.clone();
+        let app_c = app.clone();
+        let r_conn = running.clone();
+        handles.push(std::thread::spawn(move || {
+            while r_conn.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_secs(1));
+                if !r_conn.load(Ordering::Relaxed) {
+                    break;
+                }
+                let list = ClashClient::new(core.singbox.clash_port()).connections();
+                *core.connections.lock().unwrap() = list.clone();
+                let _ = app_c.emit("connections", &list);
+            }
+        }));
 
         // пинг
         let core = self.clone();

@@ -111,7 +111,12 @@ fn mixed_inbound(port: u16) -> Value {
         "type": "mixed",
         "tag": "mixed-in",
         "listen": "127.0.0.1",
-        "listen_port": port
+        "listen_port": port,
+        // Сниффинг домена из TLS/HTTP, чтобы в мониторинге соединений
+        // были видны сайты, а не только IP. Перезапись назначения не нужна
+        // (маршрутизация по правилам), только определение домена.
+        "sniff": true,
+        "sniff_override_destination": false
     })
 }
 

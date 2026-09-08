@@ -15,6 +15,20 @@ export interface PingInfo {
   error?: string | null;
 }
 
+export interface ConnectionInfo {
+  id: string;
+  host: string;
+  process?: string | null;
+  network: string;
+  source: string;
+  destination: string;
+  outbound: string;
+  viaProxy: boolean;
+  upload: number;
+  download: number;
+  start: string;
+}
+
 export interface ProfileSummary {
   kind: "vless" | "json";
   name: string;
@@ -132,6 +146,9 @@ export const api = {
     ),
   onPing: (cb: (p: PingInfo) => void) =>
     listen<PingInfo>("ping", (e) => cb(e.payload)),
+  getConnections: (): Promise<ConnectionInfo[]> => invoke("get_connections"),
+  onConnections: (cb: (list: ConnectionInfo[]) => void) =>
+    listen<ConnectionInfo[]>("connections", (e) => cb(e.payload)),
   getOpencodeProxyEnv: (): Promise<boolean> => invoke("get_opencode_proxy_env"),
   setOpencodeProxyEnv: (): Promise<void> => invoke("set_opencode_proxy_env"),
   clearOpencodeProxyEnv: (): Promise<void> => invoke("clear_opencode_proxy_env"),

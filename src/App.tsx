@@ -3,13 +3,14 @@ import {
   api,
   formatBytes,
   type AppState,
+  type ConnectionInfo,
   type PingInfo,
   type StatusInfo,
 } from "./lib/api";
 import { SpeedGraph, type Point } from "./components/SpeedGraph";
 import "./App.css";
 
-type Tab = "connect" | "rules";
+type Tab = "connect" | "rules" | "monitor";
 type ProfileMode = "vless" | "json";
 
 const PRESET_SITES = [
@@ -80,6 +81,40 @@ export default function App() {
   const [history, setHistory] = useState<Point[]>([]);
   const historyRef = useRef<Point[]>([]);
   const [elapsed, setElapsed] = useState(0);
+  // Журнал соединений для вкладки мониторинга: время первого обращения + сайт.
+  const [connLog, setConnLog] = useState<
+    { conn: ConnectionInfo; firstSeen: number }[]
+  >([]);
+  const [activeIds, setActiveIds] = useState<string[]>([]);
+  const [onlyVpn, setOnlyVpn] = useState(true);
+  const seenRef = useRef<Map<string, number>>(new Map());
+
+  const mergeConnections = useCallback((list: ConnectionInfo[]) => {
+    const now = Date.now();
+    const seen = seenRef.current;
+    for (const c of list) {
+      if (!seen.has(c.id)) seen.set(c.id, now);
+    }
+    setActiveIds(list.map((c) => c.id));
+    setConnLog((prev) => {
+      const byId = new Map(prev.map((e) => [e.conn.id, e]));
+      for (const c of list) {
+        byId.set(c.id, { conn: c, firstSeen: seen.get(c.id) ?? now });
+      }
+      const all = [...byId.values()].sort((a, b) => b.firstSeen - a.firstSeen);
+      if (all.length > 200) {
+        for (const e of all.slice(200)) seen.delete(e.conn.id);
+        return all.slice(0, 200);
+      }
+      return all;
+    });
+  }, []);
+
+  const clearConnLog = useCallback(() => {
+    seenRef.current.clear();
+    setConnLog([]);
+    setActiveIds([]);
+  }, []);
 
   useEffect(() => {
     if (!state || !state.status.connected || !state.connectedSince) {
@@ -140,11 +175,26 @@ export default function App() {
       api.onPing((ping: PingInfo) => {
         setState((s) => (s ? { ...s, ping } : s));
       }),
+      api.onConnections((list) => {
+        mergeConnections(list);
+      }),
     ];
     return () => {
       unsubs.forEach((u) => u.then((f) => f()));
     };
-  }, [refresh, pushPoint]);
+  }, [refresh, pushPoint, mergeConnections]);
+
+  // При открытии вкладки мониторинга подтянуть текущий снимок соединений.
+  useEffect(() => {
+    if (tab === "monitor" && state?.status.connected) {
+      api.getConnections().then(mergeConnections).catch(() => {});
+    }
+  }, [tab, state?.status.connected, mergeConnections]);
+
+  // После отключения активных соединений нет.
+  useEffect(() => {
+    if (!state?.status.connected) setActiveIds([]);
+  }, [state?.status.connected]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -371,6 +421,12 @@ export default function App() {
           >
             Правила
           </button>
+          <button
+            className={tab === "monitor" ? "active" : ""}
+            onClick={() => setTab("monitor")}
+          >
+            Мониторинг
+          </button>
         </nav>
         <div
           className={`pill ${connected ? "on" : "off"}`}
@@ -405,7 +461,93 @@ export default function App() {
         </div>
       )}
 
-      {tab === "connect" ? (
+      {tab === "monitor" ? (
+        <main className="content">
+          <section className="profile-card">
+            <h2>Мониторинг трафика</h2>
+            <p className="hint">
+              {connected
+                ? "Запросы в реальном времени: время обращения и сайт. Зелёная точка — соединение активно прямо сейчас."
+                : "Подключите VPN во вкладке «Подключение», чтобы видеть запросы в реальном времени."}
+            </p>
+            <div className="rule-form">
+              <label className="sub-check">
+                <input
+                  type="checkbox"
+                  checked={onlyVpn}
+                  onChange={(e) => setOnlyVpn(e.target.checked)}
+                />
+                <span>только через VPN</span>
+              </label>
+              <span style={{ fontSize: 12, opacity: 0.75 }}>
+                Активно сейчас: {activeIds.length} · В журнале: {connLog.length}
+              </span>
+              <button className="btn ghost" onClick={clearConnLog}>
+                Очистить журнал
+              </button>
+            </div>
+            {(() => {
+              const rows = connLog.filter((e) => !onlyVpn || e.conn.viaProxy);
+              if (!connected && rows.length === 0) {
+                return <p className="empty">Нет данных — VPN отключён</p>;
+              }
+              if (rows.length === 0) {
+                return (
+                  <p className="empty">
+                    {onlyVpn
+                      ? "Пока нет запросов через VPN — откройте сайт из правил"
+                      : "Пока нет запросов — откройте любой сайт"}
+                  </p>
+                );
+              }
+              return (
+                <div className="rule-lists">
+                  <div className="rule-col" style={{ flex: "1 1 100%" }}>
+                    {rows.map(({ conn, firstSeen }) => {
+                      const active = activeIds.includes(conn.id);
+                      return (
+                        <div className="rule-row" key={conn.id}>
+                          <span
+                            title={new Date(firstSeen).toLocaleString("ru-RU")}
+                            style={{ minWidth: 70 }}
+                          >
+                            {new Date(firstSeen).toLocaleTimeString("ru-RU")}
+                          </span>
+                          <span
+                            title={conn.destination}
+                            style={{
+                              flex: 1,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {active ? "● " : "○ "}
+                            {conn.host}
+                          </span>
+                          {conn.process && (
+                            <span
+                              title={`Процесс: ${conn.process}`}
+                              style={{ fontSize: 12, opacity: 0.7 }}
+                            >
+                              {conn.process}
+                            </span>
+                          )}
+                          <span
+                            className={`preset-state ${conn.viaProxy ? "on" : "off"}`}
+                          >
+                            {conn.viaProxy ? "VPN" : "напрямую"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+          </section>
+        </main>
+      ) : tab === "connect" ? (
         <main className="content">
           <section className="profile-card">
             <h2>Профиль подключения</h2>

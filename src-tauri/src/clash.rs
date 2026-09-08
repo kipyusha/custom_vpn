@@ -7,6 +7,8 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::models::ConnectionInfo;
+
 pub struct ClashClient {
     base: String,
 }
@@ -20,7 +22,7 @@ impl ClashClient {
 
     fn agent() -> ureq::Agent {
         ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_millis(400)))
+            .timeout_global(Some(Duration::from_millis(1500)))
             .build()
             .into()
     }
@@ -31,6 +33,97 @@ impl ClashClient {
             .call()
             .is_ok()
     }
+
+    /// Активные соединения sing-box через Clash API (`GET /connections`).
+    /// Возвращает пустой список, если API недоступно.
+    pub fn connections(&self) -> Vec<ConnectionInfo> {
+        let body = match Self::agent()
+            .get(&format!("{}/connections", self.base))
+            .call()
+        {
+            Ok(resp) => match resp.into_body().read_to_string() {
+                Ok(text) => text,
+                Err(_) => return Vec::new(),
+            },
+            Err(_) => return Vec::new(),
+        };
+        let v: Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+        v.get("connections")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(parse_connection).collect())
+            .unwrap_or_default()
+    }
+}
+
+fn str_field(v: &Value, key: &str) -> String {
+    v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+fn u64_field(v: &Value, key: &str) -> u64 {
+    v.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+/// Разбирает одну запись соединения Clash API.
+/// Хост: sniffed-домен (`metadata.host`), иначе IP:порт назначения.
+fn parse_connection(v: &Value) -> Option<ConnectionInfo> {
+    let m = v.get("metadata")?;
+    let host = m
+        .get("host")
+        .and_then(Value::as_str)
+        .filter(|h| !h.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| {
+            let ip = m
+                .get("destinationIP")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let port = m.get("destinationPort").and_then(Value::as_u64).unwrap_or(0);
+            format!("{ip}:{port}")
+        });
+    let process = m
+        .get("processPath")
+        .and_then(Value::as_str)
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            p.rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(p)
+                .to_string()
+        });
+    let chains: Vec<String> = v
+        .get("chains")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    let outbound = chains.last().cloned().unwrap_or_default();
+    let via_proxy = !outbound.is_empty() && outbound != "direct";
+    let src_ip = m.get("sourceIP").and_then(Value::as_str).unwrap_or("?");
+    let src_port = m.get("sourcePort").and_then(Value::as_u64).unwrap_or(0);
+    Some(ConnectionInfo {
+        id: str_field(v, "id"),
+        host,
+        process,
+        network: str_field(m, "network"),
+        source: format!("{src_ip}:{src_port}"),
+        destination: format!(
+            "{}:{}",
+            m.get("destinationIP").and_then(Value::as_str).unwrap_or("?"),
+            m.get("destinationPort").and_then(Value::as_u64).unwrap_or(0)
+        ),
+        outbound,
+        via_proxy,
+        upload: u64_field(v, "upload"),
+        download: u64_field(v, "download"),
+        start: str_field(v, "start"),
+    })
 }
 
 /// Запускает фоновый поток, читающий /traffic (WebSocket) и вызывающий

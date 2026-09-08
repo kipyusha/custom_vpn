@@ -209,6 +209,11 @@ pub fn get_ping(core: State<'_, Arc<Core>>) -> crate::models::PingInfo {
 }
 
 #[tauri::command]
+pub fn get_connections(core: State<'_, Arc<Core>>) -> Vec<crate::models::ConnectionInfo> {
+    core.get_connections()
+}
+
+#[tauri::command]
 pub fn get_opencode_proxy_env(core: State<'_, Arc<Core>>) -> bool {
     let port = core.app_config().settings.mixed_port;
     crate::winutil::get_opencode_proxy_env_status(port)

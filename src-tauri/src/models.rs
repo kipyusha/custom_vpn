@@ -231,3 +231,23 @@ pub struct PingInfo {
     pub latency_ms: Option<u64>,
     pub error: Option<String>,
 }
+
+/// Одно активное соединение из Clash API sing-box.
+/// `outbound` — тег исходящего подключения (последний в цепочке);
+/// `via_proxy` — true, если трафик идёт не через direct (т.е. через VPN).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionInfo {
+    pub id: String,
+    /// Домен (при включённом sniffing) либо IP:порт назначения.
+    pub host: String,
+    pub process: Option<String>,
+    pub network: String,
+    pub source: String,
+    pub destination: String,
+    pub outbound: String,
+    pub via_proxy: bool,
+    pub upload: u64,
+    pub download: u64,
+    pub start: String,
+}
