@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   api,
   formatBytes,
@@ -107,6 +108,14 @@ export default function App() {
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const dlRef = useRef({ done: 0, total: 0 });
+  // Версия приложения для отображения в шапке.
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => {});
+  }, []);
   // Тикающие часы, чтобы бейдж NEW гас через 5 минут без новых данных.
   const [nowTick, setNowTick] = useState(Date.now());
   const trackRef = useRef<
@@ -578,6 +587,9 @@ export default function App() {
         <div className="brand">
           <span className="logo">SV</span>
           <h1>CustomVPN</h1>
+          {appVersion && (
+            <span style={{ fontSize: 12, opacity: 0.6 }}>v{appVersion}</span>
+          )}
         </div>
         <nav className="tabs">
           <button
