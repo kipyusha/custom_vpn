@@ -82,43 +82,77 @@ export default function App() {
   const historyRef = useRef<Point[]>([]);
   const [elapsed, setElapsed] = useState(0);
   // Журнал соединений для вкладки мониторинга: время первого обращения + сайт.
+  // Соединение считается "живым", только если по нему был трафик
+  // за последние IDLE_TIMEOUT (браузер держит keep-alive соединения
+  // открытыми ещё долго после закрытия вкладки).
+  const IDLE_TIMEOUT = 10 * 1000;
   const [connLog, setConnLog] = useState<
-    { conn: ConnectionInfo; firstSeen: number; lastSeen: number }[]
+    {
+      conn: ConnectionInfo;
+      firstSeen: number;
+      lastSeen: number;
+      live: boolean;
+      lastFlow: number;
+    }[]
   >([]);
   const [activeList, setActiveList] = useState<ConnectionInfo[]>([]);
   const [onlyVpn, setOnlyVpn] = useState(true);
   const [search, setSearch] = useState("");
   // Тикающие часы, чтобы бейдж NEW гас через 5 минут без новых данных.
   const [nowTick, setNowTick] = useState(Date.now());
-  const seenRef = useRef<Map<string, number>>(new Map());
+  const trackRef = useRef<
+    Map<string, { first: number; up: number; down: number; flow: number }>
+  >(new Map());
 
-  const mergeConnections = useCallback((list: ConnectionInfo[]) => {
-    const now = Date.now();
-    const seen = seenRef.current;
-    for (const c of list) {
-      if (!seen.has(c.id)) seen.set(c.id, now);
-    }
-    setActiveList(list);
-    setConnLog((prev) => {
-      const byId = new Map(prev.map((e) => [e.conn.id, e]));
+  const mergeConnections = useCallback(
+    (list: ConnectionInfo[]) => {
+      const now = Date.now();
+      const track = trackRef.current;
+      const liveById = new Map<string, boolean>();
       for (const c of list) {
-        byId.set(c.id, {
-          conn: c,
-          firstSeen: seen.get(c.id) ?? now,
-          lastSeen: now,
-        });
+        const total = c.upload + c.download;
+        const prev = track.get(c.id);
+        if (!prev) {
+          track.set(c.id, { first: now, up: c.upload, down: c.download, flow: now });
+        } else if (total !== prev.up + prev.down) {
+          prev.up = c.upload;
+          prev.down = c.download;
+          prev.flow = now;
+        }
+        liveById.set(c.id, now - track.get(c.id)!.flow < IDLE_TIMEOUT);
       }
-      const all = [...byId.values()].sort((a, b) => b.firstSeen - a.firstSeen);
-      if (all.length > 200) {
-        for (const e of all.slice(200)) seen.delete(e.conn.id);
-        return all.slice(0, 200);
-      }
-      return all;
-    });
-  }, []);
+      setActiveList(list.filter((c) => liveById.get(c.id)));
+      setConnLog((prev) => {
+        const byId = new Map(prev.map((e) => [e.conn.id, e]));
+        for (const c of list) {
+          const t = track.get(c.id)!;
+          byId.set(c.id, {
+            conn: c,
+            firstSeen: t.first,
+            lastSeen: now,
+            live: liveById.get(c.id) ?? false,
+            lastFlow: t.flow,
+          });
+        }
+        // соединения, пропавшие из снимка, уже не живые
+        for (const [id, e] of byId) {
+          if (!liveById.has(id) && e.live) {
+            byId.set(id, { ...e, live: false });
+          }
+        }
+        const all = [...byId.values()].sort((a, b) => b.firstSeen - a.firstSeen);
+        if (all.length > 200) {
+          for (const e of all.slice(200)) track.delete(e.conn.id);
+          return all.slice(0, 200);
+        }
+        return all;
+      });
+    },
+    [IDLE_TIMEOUT],
+  );
 
   const clearConnLog = useCallback(() => {
-    seenRef.current.clear();
+    trackRef.current.clear();
     setConnLog([]);
     setActiveList([]);
   }, []);
@@ -128,6 +162,7 @@ export default function App() {
     count: number;
     firstSeen: number;
     lastSeen: number;
+    lastFlow: number;
     active: boolean;
     process?: string | null;
     viaProxy: boolean;
@@ -152,6 +187,7 @@ export default function App() {
       if (g) {
         g.count += 1;
         g.firstSeen = Math.min(g.firstSeen, e.firstSeen);
+        g.lastFlow = Math.max(g.lastFlow, e.lastFlow);
         if (e.lastSeen >= g.lastSeen) {
           g.lastSeen = e.lastSeen;
           g.process = e.conn.process;
@@ -164,6 +200,7 @@ export default function App() {
           count: 1,
           firstSeen: e.firstSeen,
           lastSeen: e.lastSeen,
+          lastFlow: e.lastFlow,
           active: false,
           process: e.conn.process,
           viaProxy: e.conn.viaProxy,
@@ -539,7 +576,7 @@ export default function App() {
             <h2>Мониторинг трафика</h2>
             <p className="hint">
               {connected
-                ? "Запросы в реальном времени: время обращения и сайт. Зелёная точка — соединение активно прямо сейчас."
+                ? "Запросы в реальном времени: время обращения и сайт. Зелёная точка — по соединению идёт трафик прямо сейчас (без трафика дольше 10 сек считается закрытым)."
                 : "Подключите VPN во вкладке «Подключение», чтобы видеть запросы в реальном времени."}
             </p>
             <div className="rule-form">
@@ -619,7 +656,7 @@ export default function App() {
                             </span>
                           )}
                           <span
-                            title={`Первое: ${new Date(g.firstSeen).toLocaleString("ru-RU")}\nПоследнее: ${new Date(g.lastSeen).toLocaleString("ru-RU")}`}
+                            title={`Первое: ${new Date(g.firstSeen).toLocaleString("ru-RU")}\nПоследнее: ${new Date(g.lastSeen).toLocaleString("ru-RU")}\nТрафик: ${new Date(g.lastFlow).toLocaleString("ru-RU")}`}
                             style={{ minWidth: 70 }}
                           >
                             {new Date(g.lastSeen).toLocaleTimeString("ru-RU")}
