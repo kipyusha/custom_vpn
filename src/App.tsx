@@ -586,14 +586,14 @@ export default function App() {
                   <div className="rule-col" style={{ flex: "1 1 100%" }}>
                     {hostGroups.map((g) => {
                       const ageMs = nowTick - g.firstSeen;
-                      // NEW: зелёный — младше 60 сек, оранжевый — от 60 сек до 5 мин,
-                      // старше 5 мин — бейдж скрывается.
+                      // NEW виден 5 минут: зелёный — соединение активно,
+                      // оранжевый — уже закрыто.
                       const newTone =
-                        ageMs < 60 * 1000
-                          ? "green"
-                          : ageMs < 5 * 60 * 1000
-                            ? "orange"
-                            : null;
+                        ageMs >= 5 * 60 * 1000
+                          ? null
+                          : g.active
+                            ? "green"
+                            : "orange";
                       return (
                         <div className="rule-row" key={g.host}>
                           {newTone && (
@@ -605,6 +605,7 @@ export default function App() {
                                 padding: "2px 6px",
                                 borderRadius: 6,
                                 flexShrink: 0,
+                                marginRight: 6,
                                 color:
                                   newTone === "green" ? "#4ade80" : "#fb923c",
                                 background:
@@ -632,7 +633,15 @@ export default function App() {
                               whiteSpace: "nowrap",
                             }}
                           >
-                            {g.active ? "● " : "○ "}
+                            <span
+                              style={{
+                                color: g.active
+                                  ? "#4ade80"
+                                  : "rgba(255,255,255,.3)",
+                              }}
+                            >
+                              {g.active ? "●" : "○"}
+                            </span>{" "}
                             {g.host}
                           </span>
                           {g.count > 1 && (
@@ -653,6 +662,7 @@ export default function App() {
                           )}
                           <span
                             className={`preset-state ${g.viaProxy ? "on" : "off"}`}
+                            style={{ marginLeft: 6 }}
                           >
                             {g.viaProxy ? "VPN" : "напрямую"}
                           </span>
