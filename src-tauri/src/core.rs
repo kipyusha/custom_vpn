@@ -39,6 +39,11 @@ pub struct Core {
 impl Core {
     pub fn new(data_dir: std::path::PathBuf, resource_dir: std::path::PathBuf) -> Self {
         let cfg = Store::new(data_dir.clone()).load();
+        // Миграция прокси-переменных: дописываем GitHub в NO_PROXY,
+        // чтобы проверка обновлений ходила напрямую при выключенном VPN.
+        if crate::winutil::get_opencode_proxy_env_status(cfg.settings.mixed_port) {
+            let _ = crate::winutil::set_opencode_proxy_env(cfg.settings.mixed_port);
+        }
         let singbox = SingBox::new(
             data_dir.clone(),
             resource_dir,

@@ -54,7 +54,9 @@ pub fn is_admin() -> bool {
 }
 
 const ENV_KEY: &str = "Environment";
-const NO_PROXY_VAL: &str = "localhost,127.0.0.1,::1";
+// GitHub-хосты в исключениях: проверка обновлений обязана ходить напрямую,
+// иначе при выключенном VPN мёртвый локальный прокси роняет запрос.
+const NO_PROXY_VAL: &str = "localhost,127.0.0.1,::1,github.com,api.github.com,objects.githubusercontent.com,release-assets.githubusercontent.com";
 
 fn broadcast_env_change() {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
