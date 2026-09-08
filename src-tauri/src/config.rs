@@ -111,12 +111,7 @@ fn mixed_inbound(port: u16) -> Value {
         "type": "mixed",
         "tag": "mixed-in",
         "listen": "127.0.0.1",
-        "listen_port": port,
-        // Сниффинг домена из TLS/HTTP, чтобы в мониторинге соединений
-        // были видны сайты, а не только IP. Перезапись назначения не нужна
-        // (маршрутизация по правилам), только определение домена.
-        "sniff": true,
-        "sniff_override_destination": false
+        "listen_port": port
     })
 }
 
@@ -258,6 +253,10 @@ pub fn build_singbox_config(app: &AppConfig) -> Result<Value, String> {
         .collect();
 
     let mut rules: Vec<Value> = Vec::new();
+    // Сниффинг домена из TLS/HTTP первым правилом, чтобы в мониторинге
+    // соединений (Clash API) были видны сайты, а не только IP.
+    // В sing-box 1.11+ это route-правило, а не поле inbound.
+    rules.push(json!({ "action": "sniff" }));
     // правила по процессам имеют приоритет над правилами по доменам
     for p in &app.rules.process_direct {
         rules.push(process_rule(p, &direct_tag));
@@ -345,8 +344,10 @@ mod tests {
         assert_eq!(cfg["outbounds"][0]["server"], "example.com");
         assert_eq!(cfg["outbounds"][0]["tls"]["reality"]["enabled"], true);
         let rules = cfg["route"]["rules"].as_array().unwrap();
-        // 1 прямая + 1 через VPN (ручные домены) + 5 пресетных + финальное = 8
-        assert_eq!(rules.len(), 8);
+        // sniff + 1 прямая + 1 через VPN (ручные домены) + 5 пресетных + финальное = 9
+        assert_eq!(rules.len(), 9);
+        // первое правило — сниффинг домена для мониторинга
+        assert_eq!(rules[0]["action"], "sniff");
         // по умолчанию трафик идёт напрямую
         assert_eq!(rules.last().unwrap()["outbound"], "direct");
         // пресеты включены по умолчанию → один суффиксный rule со всеми доменами
@@ -505,11 +506,11 @@ mod tests {
         app.rules.process_direct = vec!["notepad.exe".into()];
         let cfg = build_singbox_config(&app).unwrap();
         let rules = cfg["route"]["rules"].as_array().unwrap();
-        // правила по процессам идут первыми
-        assert_eq!(rules[0]["process_name"][0], "notepad.exe");
-        assert_eq!(rules[0]["outbound"], "direct");
-        assert_eq!(rules[1]["process_name"][0], "Telegram.exe");
-        assert_eq!(rules[1]["outbound"], "proxy");
+        // правила по процессам идут первыми после sniff
+        assert_eq!(rules[1]["process_name"][0], "notepad.exe");
+        assert_eq!(rules[1]["outbound"], "direct");
+        assert_eq!(rules[2]["process_name"][0], "Telegram.exe");
+        assert_eq!(rules[2]["outbound"], "proxy");
     }
 
     #[test]
