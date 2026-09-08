@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - run: npm ci
+
+      # Сборка Tauri, подпись обновлений и публикация черновика релиза.
+      # Релиз создаётся как Draft: проверь файлы, потом нажми Publish.
+      - uses: tauri-apps/tauri-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "CustomVPN ${{ github.ref_name }}"
+          releaseBody: "См. список изменений."
+          releaseDraft: true
+          includeUpdaterJson: true
+
+      # Портабл-архив для тех, кто не пользуется установщиком.
+      - name: Build portable zip
+        run: powershell -ExecutionPolicy Bypass -File packaging/package-portable.ps1
+
+      - name: Attach portable zip to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: CustomVPN-Portable.zip

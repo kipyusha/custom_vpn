@@ -20,6 +20,10 @@ CustomVPN-Portable.zip
 # Local runtime files
 opencode
 
+# Tauri updater signing keys (приватный ключ — только в секретах CI!)
+*.key
+*.key.pub
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

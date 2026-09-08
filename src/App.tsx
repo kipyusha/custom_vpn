@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   api,
   formatBytes,
@@ -98,6 +100,13 @@ export default function App() {
   const [activeList, setActiveList] = useState<ConnectionInfo[]>([]);
   const [onlyVpn, setOnlyVpn] = useState(true);
   const [search, setSearch] = useState("");
+  // Обновления приложения (Tauri updater + GitHub Releases).
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
+  const dlRef = useRef({ done: 0, total: 0 });
   // Тикающие часы, чтобы бейдж NEW гас через 5 минут без новых данных.
   const [nowTick, setNowTick] = useState(Date.now());
   const trackRef = useRef<
@@ -304,6 +313,59 @@ export default function App() {
     const id = setInterval(() => setNowTick(Date.now()), 10000);
     return () => clearInterval(id);
   }, [tab]);
+
+  const checkForUpdates = useCallback(async (manual: boolean) => {
+    setCheckingUpdate(true);
+    setUpdateMsg(null);
+    try {
+      const u = await check();
+      if (u) {
+        setUpdate(u);
+        setUpdateDismissed(false);
+        if (manual) setNotice(`Доступна версия ${u.version}`);
+      } else if (manual) {
+        setNotice("Обновлений нет — у вас последняя версия");
+      }
+    } catch (e) {
+      // В dev-режиме и без сети проверка недоступна — молча пропускаем,
+      // при ручной проверке показываем ошибку.
+      if (manual) setError(`Проверка обновлений: ${String(e)}`);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }, []);
+
+  // Проверка обновлений при старте приложения.
+  useEffect(() => {
+    checkForUpdates(false);
+  }, [checkForUpdates]);
+
+  const installUpdate = useCallback(async () => {
+    if (!update) return;
+    dlRef.current = { done: 0, total: 0 };
+    setUpdateProgress(0);
+    setUpdateMsg(null);
+    try {
+      await update.downloadAndInstall((ev) => {
+        if (ev.event === "Started") {
+          dlRef.current = { done: 0, total: ev.data.contentLength ?? 0 };
+          setUpdateProgress(0);
+        } else if (ev.event === "Progress") {
+          const d = dlRef.current;
+          d.done += ev.data.chunkLength;
+          setUpdateProgress(
+            d.total > 0 ? Math.min(99, Math.round((d.done / d.total) * 100)) : 0,
+          );
+        } else if (ev.event === "Finished") {
+          setUpdateProgress(100);
+        }
+      });
+      await relaunch();
+    } catch (e) {
+      setUpdateMsg(`Ошибка установки обновления: ${String(e)}`);
+      setUpdateProgress(null);
+    }
+  }, [update]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -537,6 +599,28 @@ export default function App() {
             Мониторинг
           </button>
         </nav>
+        <button
+          className="btn ghost"
+          onClick={() => checkForUpdates(true)}
+          disabled={checkingUpdate}
+          title="Проверить обновления"
+          style={{ position: "relative" }}
+        >
+          {checkingUpdate ? "…" : "⟳"}
+          {update && !updateDismissed && (
+            <span
+              style={{
+                position: "absolute",
+                top: -4,
+                right: -4,
+                width: 10,
+                height: 10,
+                borderRadius: "50%",
+                background: "#4ade80",
+              }}
+            />
+          )}
+        </button>
         <div
           className={`pill ${connected ? "on" : "off"}`}
           title={connected ? "Подключено" : "Отключено"}
@@ -567,6 +651,69 @@ export default function App() {
         <div className="banner ok">
           <span>{notice}</span>
           <button onClick={() => setNotice(null)}>✕</button>
+        </div>
+      )}
+      {update && !updateDismissed && updateProgress === null && (
+        <div className="banner ok">
+          <span>
+            Доступно обновление до версии {update.version}
+            {update.body && (
+              <details style={{ marginTop: 6, fontWeight: "normal" }}>
+                <summary style={{ cursor: "pointer" }}>
+                  Что нового
+                </summary>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    fontSize: 12,
+                    maxHeight: 120,
+                    overflowY: "auto",
+                    marginTop: 6,
+                  }}
+                >
+                  {update.body}
+                </pre>
+              </details>
+            )}
+          </span>
+          <span style={{ display: "flex", gap: 8 }}>
+            <button className="btn primary" onClick={installUpdate}>
+              Обновить
+            </button>
+            <button onClick={() => setUpdateDismissed(true)}>Позже</button>
+          </span>
+        </div>
+      )}
+      {updateProgress !== null && (
+        <div className="banner ok">
+          <span>
+            Установка обновления… {updateProgress}%
+            <span
+              style={{
+                display: "block",
+                height: 6,
+                borderRadius: 3,
+                background: "rgba(255,255,255,.15)",
+                marginTop: 6,
+                overflow: "hidden",
+              }}
+            >
+              <span
+                style={{
+                  display: "block",
+                  height: "100%",
+                  width: `${updateProgress}%`,
+                  background: "#4ade80",
+                }}
+              />
+            </span>
+          </span>
+        </div>
+      )}
+      {updateMsg && (
+        <div className="banner error">
+          <span>{updateMsg}</span>
+          <button onClick={() => setUpdateMsg(null)}>✕</button>
         </div>
       )}
 
