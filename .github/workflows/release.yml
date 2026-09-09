@@ -12,6 +12,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Полная история и теги нужны для автогенерации списка изменений.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -24,6 +27,24 @@ jobs:
 
       - run: npm ci
 
+      # Список изменений из коммитов между предыдущим и текущим тегом.
+      # Технические коммиты (бамп версии, мержи) отфильтровываются.
+      - name: Build release notes
+        id: notes
+        run: |
+          $current = "${{ github.ref_name }}"
+          $prev = git tag --sort=-creatordate | Where-Object { $_ -ne $current } | Select-Object -First 1
+          if ($prev) {
+            $log = git log --pretty=format:'- %s' "$prev..$current"
+          } else {
+            $log = git log --pretty=format:'- %s' -10 $current
+          }
+          $log = $log | Where-Object { $_ -notmatch '^- Версия ' -and $_ -notmatch '^- Merge ' }
+          $body = "## Что нового`n`n" + ($log -join "`n")
+          "body<<EOF" >> $env:GITHUB_OUTPUT
+          $body >> $env:GITHUB_OUTPUT
+          "EOF" >> $env:GITHUB_OUTPUT
+
       # Сборка Tauri, подпись обновлений и публикация черновика релиза.
       # Релиз создаётся как Draft: проверь файлы, потом нажми Publish.
       - uses: tauri-apps/tauri-action@v0
@@ -33,7 +54,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "CustomVPN ${{ github.ref_name }}"
-          releaseBody: "См. список изменений."
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           includeUpdaterJson: true
 
