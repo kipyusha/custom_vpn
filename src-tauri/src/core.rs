@@ -231,6 +231,26 @@ impl Core {
         if cfg.preset_sites.state(id).subdomains.iter().any(|d| d == &sub) {
             return Err(format!("Поддомен {sub} уже добавлен"));
         }
+        // поддомен не должен дублировать другие сайты
+        if cfg.custom_sites.iter().any(|s| {
+            s.domain == sub || s.subdomains.iter().any(|d| d == &sub)
+        }) {
+            return Err(format!("Сайт {sub} уже добавлен"));
+        }
+        for ps in config::PRESET_SITES {
+            if ps.id == id {
+                continue;
+            }
+            let st = cfg.preset_sites.state(ps.id);
+            if st.deleted {
+                continue;
+            }
+            if ps.domains.contains(&sub.as_str())
+                || st.subdomains.iter().any(|d| d == &sub)
+            {
+                return Err(format!("Сайт {sub} уже есть в списке сайтов"));
+            }
+        }
         cfg.preset_sites.add_subdomain(id, sub.clone());
         self.persist(cfg)
     }
@@ -261,11 +281,28 @@ impl Core {
     }
 
     /// Добавляет пользовательский сайт-переключатель из ссылки или домена.
+    /// Дубли (включая стандартные сайты и их поддомены) отклоняются
+    /// с понятной ошибкой — она показывается баннером сверху.
     pub fn add_custom_site(&self, link: &str) -> Result<(), String> {
         let domain = parse_site_domain(link)?;
         let mut cfg = self.store.load();
-        if cfg.custom_sites.iter().any(|s| s.domain == domain) {
+        if cfg
+            .custom_sites
+            .iter()
+            .any(|s| s.domain == domain || s.subdomains.iter().any(|d| d == &domain))
+        {
             return Err(format!("Сайт {domain} уже добавлен"));
+        }
+        for ps in config::PRESET_SITES {
+            let st = cfg.preset_sites.state(ps.id);
+            if st.deleted {
+                continue;
+            }
+            if ps.domains.contains(&domain.as_str())
+                || st.subdomains.iter().any(|d| d == &domain)
+            {
+                return Err(format!("Сайт {domain} уже есть в списке сайтов"));
+            }
         }
         let id = format!(
             "c{}",
@@ -308,6 +345,24 @@ impl Core {
     pub fn add_custom_site_subdomain(&self, id: &str, subdomain: &str) -> Result<(), String> {
         let sub = parse_site_domain(subdomain)?;
         let mut cfg = self.store.load();
+        // поддомен не должен дублировать другие сайты (проверки до
+        // изменяемого заимствования)
+        if cfg.custom_sites.iter().any(|s| {
+            s.id != id && (s.domain == sub || s.subdomains.iter().any(|d| d == &sub))
+        }) {
+            return Err(format!("Сайт {sub} уже добавлен"));
+        }
+        for ps in config::PRESET_SITES {
+            let st = cfg.preset_sites.state(ps.id);
+            if st.deleted {
+                continue;
+            }
+            if ps.domains.contains(&sub.as_str())
+                || st.subdomains.iter().any(|d| d == &sub)
+            {
+                return Err(format!("Сайт {sub} уже есть в списке сайтов"));
+            }
+        }
         let site = cfg
             .custom_sites
             .iter_mut()
@@ -611,5 +666,47 @@ mod tests {
     fn rejects_garbage() {
         assert!(parse_site_domain("не адрес").is_err());
         assert!(parse_site_domain("").is_err());
+    }
+
+    fn test_core() -> (std::sync::Arc<super::Core>, std::path::PathBuf) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "customvpn-dup-test-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let core = std::sync::Arc::new(super::Core::new(dir.clone(), dir.clone()));
+        (core, dir)
+    }
+
+    #[test]
+    fn rejects_duplicate_sites() {
+        let (core, dir) = test_core();
+        // instagram уже есть в стандартных сайтах — дубль отклоняется
+        assert!(core.add_custom_site("https://www.instagram.com/").is_err());
+        // новый сайт добавляется один раз
+        assert!(core.add_custom_site("https://example.com").is_ok());
+        assert!(core.add_custom_site("example.com").is_err());
+        assert!(core
+            .add_custom_site("https://sub.example.com/page")
+            .is_ok());
+        // поддомен существующего сайта — тоже дубль
+        let id = core
+            .app_config()
+            .custom_sites
+            .iter()
+            .find(|s| s.domain == "example.com")
+            .unwrap()
+            .id
+            .clone();
+        assert!(core.add_custom_site_subdomain(&id, "sub.example.com").is_err());
+        assert!(core.add_custom_site_subdomain(&id, "instagram.com").is_err());
+        // удалённый стандартный сайт можно добавить заново
+        assert!(core.delete_preset_site("instagram").is_ok());
+        assert!(core.add_custom_site("https://www.instagram.com/").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

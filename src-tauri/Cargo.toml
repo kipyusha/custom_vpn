@@ -1,6 +1,6 @@
 [package]
 name = "custom-vpn"
-version = "0.1.4"
+version = "0.1.5"
 description = "Custom VPN client (VLESS / sing-box)"
 authors = ["you"]
 edition = "2021"

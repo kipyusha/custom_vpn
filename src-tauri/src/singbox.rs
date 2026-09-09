@@ -177,6 +177,7 @@ fn ensure_dlls(bin_dir: &Path, resource_dir: &Path) {
 /// (остатки прошлых запусков/обновлений). Чужие процессы не трогает.
 #[cfg(windows)]
 fn kill_orphans(config_path: &Path) {
+    use std::os::windows::process::CommandExt;
     let pattern = format!("*{}*", config_path.to_string_lossy());
     let script = format!(
         "Get-CimInstance Win32_Process -Filter \"Name = 'sing-box.exe'\" \
@@ -185,6 +186,7 @@ fn kill_orphans(config_path: &Path) {
     );
     let _ = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", &script])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW: без вспышки консоли
         .output();
 }
 
