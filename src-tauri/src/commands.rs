@@ -219,6 +219,11 @@ pub fn cleanup_orphans(core: State<'_, Arc<Core>>) {
 }
 
 #[tauri::command]
+pub fn refresh_tray(app: AppHandle) {
+    crate::sync_tray(&app);
+}
+
+#[tauri::command]
 pub fn get_opencode_proxy_env(core: State<'_, Arc<Core>>) -> bool {
     let port = core.app_config().settings.mixed_port;
     crate::winutil::get_opencode_proxy_env_status(port)

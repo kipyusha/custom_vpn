@@ -148,6 +148,13 @@ export const api = {
     listen<PingInfo>("ping", (e) => cb(e.payload)),
   getConnections: (): Promise<ConnectionInfo[]> => invoke("get_connections"),
   cleanupOrphans: (): Promise<void> => invoke("cleanup_orphans"),
+  refreshTray: (): Promise<void> => invoke("refresh_tray"),
+  onCheckUpdates: (cb: () => void) =>
+    listen("check-updates", () => cb()),
+  onTrayMinimized: (cb: () => void) =>
+    listen("tray-minimized", () => cb()),
+  onTrayError: (cb: (msg: string) => void) =>
+    listen<string>("tray-error", (e) => cb(e.payload)),
   onConnections: (cb: (list: ConnectionInfo[]) => void) =>
     listen<ConnectionInfo[]>("connections", (e) => cb(e.payload)),
   getOpencodeProxyEnv: (): Promise<boolean> => invoke("get_opencode_proxy_env"),

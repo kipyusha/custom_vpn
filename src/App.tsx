@@ -291,6 +291,8 @@ export default function App() {
       }),
       api.onStatus((status: StatusInfo) => {
         setState((s) => (s ? { ...s, status } : s));
+        // Меню трея держим в sync со статусом подключения.
+        api.refreshTray().catch(() => {});
       }),
       api.onPing((ping: PingInfo) => {
         setState((s) => (s ? { ...s, ping } : s));
@@ -386,6 +388,26 @@ export default function App() {
       setUpdateProgress(null);
     }
   }, [update, refresh]);
+
+  // События от трея: проверка обновлений, сворачивание, ошибки.
+  useEffect(() => {
+    const unsubs = [
+      api.onCheckUpdates(() => {
+        checkForUpdates(true);
+      }),
+      api.onTrayMinimized(() => {
+        setNotice(
+          "Приложение продолжает работать в трее. Выход — через меню иконки.",
+        );
+      }),
+      api.onTrayError((msg: string) => {
+        setError(msg);
+      }),
+    ];
+    return () => {
+      unsubs.forEach((u) => u.then((f) => f()));
+    };
+  }, [checkForUpdates]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
