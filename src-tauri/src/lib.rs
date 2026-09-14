@@ -75,6 +75,13 @@ fn toggle_main_window(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Лекарство от случайного чёрного окна: отключаем GPU-ускорение
+    // WebView2 до его инициализации. Наш интерфейс лёгкий (текст/SVG),
+    // программный рендеринг тянет без потерь, зато драйверы видеокарт
+    // больше не роняют рендер.
+    if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu");
+    }
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
