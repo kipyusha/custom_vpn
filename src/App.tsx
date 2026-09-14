@@ -11,6 +11,7 @@ import {
   type StatusInfo,
 } from "./lib/api";
 import { SpeedGraph, type Point } from "./components/SpeedGraph";
+import ghostLogo from "./assets/ghost.png";
 import "./App.css";
 
 type Tab = "connect" | "rules" | "monitor";
@@ -622,7 +623,7 @@ export default function App() {
     <div className="app">
       <header className="header">
         <div className="brand">
-          <span className="logo">SV</span>
+          <img className="logo" src={ghostLogo} alt="CustomVPN" />
           <h1>CustomVPN</h1>
           {appVersion && (
             <span style={{ fontSize: 12, opacity: 0.6 }}>v{appVersion}</span>

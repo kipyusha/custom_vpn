@@ -52,17 +52,11 @@ body {
   gap: 10px;
 }
 
-.brand .logo {
-  background: #22d3ee;
-  color: #0b1220;
-  font-weight: 800;
-  font-size: 13px;
+.brand img.logo {
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  display: grid;
-  place-items: center;
-  letter-spacing: 0.5px;
+  display: block;
 }
 
 .brand h1 {
