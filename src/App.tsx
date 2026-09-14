@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
@@ -37,6 +38,7 @@ interface SiteItem {
 }
 
 function EyeIcon({ off }: { off: boolean }) {
+
   return (
     <svg
       width="15"
@@ -63,6 +65,67 @@ function EyeIcon({ off }: { off: boolean }) {
       )}
     </svg>
   );
+}
+
+class ErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error) {
+    try {
+      const prev = localStorage.getItem("last-ui-error") ?? "";
+      localStorage.setItem(
+        "last-ui-error",
+        `${new Date().toISOString()} ${error.message}\n${error.stack ?? ""}\n---\n${prev}`.slice(0, 4000),
+      );
+    } catch {}
+  }
+
+  render() {
+    if (this.state.error) {
+      const e = this.state.error;
+      return (
+        <div
+          style={{
+            padding: 24,
+            color: "#fff",
+            background: "#7f1d1d",
+            minHeight: "100vh",
+            fontSize: 14,
+          }}
+        >
+          <h2>Ошибка интерфейса</h2>
+          <p>{e.message}</p>
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              fontSize: 12,
+              maxHeight: 300,
+              overflowY: "auto",
+              background: "rgba(0,0,0,.4)",
+              padding: 10,
+              borderRadius: 8,
+            }}
+          >
+            {e.stack}
+          </pre>
+          <button
+            className="btn primary"
+            onClick={() => window.location.reload()}
+          >
+            Перезагрузить окно
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 export default function App() {
@@ -620,6 +683,7 @@ export default function App() {
   };
 
   return (
+    <ErrorBoundary>
     <div className="app">
       <header className="header">
         <div className="brand">
@@ -1424,5 +1488,6 @@ $env:HTTPS_PROXY="http://127.0.0.1:2080"; $env:HTTP_PROXY="http://127.0.0.1:2080
         </main>
       )}
     </div>
+    </ErrorBoundary>
   );
 }

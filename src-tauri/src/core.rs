@@ -27,6 +27,7 @@ struct Workers {
 pub struct Core {
     store: Store,
     singbox: SingBox,
+    log_path: std::path::PathBuf,
     status: Mutex<StatusInfo>,
     ping: Mutex<PingInfo>,
     traffic: Mutex<TrafficState>,
@@ -51,10 +52,12 @@ impl Core {
             cfg.settings.clash_port,
         );
         let server = profile_server(&cfg);
-        let store = Store::new(data_dir);
+        let store = Store::new(data_dir.clone());
+        let log_path = data_dir.join("app.log");
         Self {
             store,
             singbox,
+            log_path,
             status: Mutex::new(StatusInfo::default()),
             ping: Mutex::new(PingInfo::default()),
             traffic: Mutex::new(TrafficState::default()),
@@ -71,6 +74,23 @@ impl Core {
 
     pub fn is_admin() -> bool {
         crate::winutil::is_admin()
+    }
+
+    /// Строка в app.log с меткой времени (диагностика зависаний/чёрного окна).
+    fn log(&self, msg: &str) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let line = format!("[{ts}] {msg}\n");
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+            .and_then(|mut f| {
+                use std::io::Write as _;
+                f.write_all(line.as_bytes())
+            });
     }
 
     // ---------- профиль ----------
@@ -428,9 +448,13 @@ impl Core {
         if self.status.lock().unwrap().connected {
             return Err("Уже подключено".into());
         }
+        self.log("connect: start");
         let cfg = self.store.load();
         let built = config::build_singbox_config(&cfg)?;
-        self.singbox.start(&built)?;
+        if let Err(e) = self.singbox.start(&built) {
+            self.log(&format!("connect: singbox failed: {e}"));
+            return Err(e);
+        }
 
         self.start_workers(app.clone());
 
@@ -448,10 +472,12 @@ impl Core {
         };
         *self.connected_at.lock().unwrap() = Some(std::time::SystemTime::now());
         self.emit_status(app);
+        self.log("connect: ok");
         Ok(())
     }
 
     pub fn disconnect(self: &Arc<Self>, app: &AppHandle) {
+        self.log("disconnect");
         self.stop_workers();
         self.singbox.stop();
         *self.connected_at.lock().unwrap() = None;
