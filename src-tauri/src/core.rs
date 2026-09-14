@@ -54,7 +54,7 @@ impl Core {
         let server = profile_server(&cfg);
         let store = Store::new(data_dir.clone());
         let log_path = data_dir.join("app.log");
-        Self {
+        let core = Self {
             store,
             singbox,
             log_path,
@@ -65,7 +65,17 @@ impl Core {
             server: Mutex::new(server),
             connected_at: Mutex::new(None),
             workers: Mutex::new(None),
-        }
+        };
+        // Метка запуска: какой exe и pid. Если чёрный экран из-за второго
+        // экземпляра (блокировка профиля WebView), это будет видно в логе.
+        core.log(&format!(
+            "start pid={} exe={}",
+            std::process::id(),
+            std::env::current_exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "?".into())
+        ));
+        core
     }
 
     pub fn is_binary_available(&self) -> bool {
