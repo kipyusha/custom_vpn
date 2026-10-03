@@ -8,6 +8,30 @@
 
   <body>
     <div id="root"></div>
+    <script>
+      // Сторож запуска: если JS-бандл не смонтировался (битый WebView2 /
+      // драйвер = чисто чёрное окно), показываем диагностику вместо пустоты.
+      setTimeout(function () {
+        var root = document.getElementById("root");
+        if (root && root.childElementCount === 0 && !window.__vpn_booted) {
+          document.body.style.background = "#10131a";
+          document.body.insertAdjacentHTML(
+            "beforeend",
+            '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:32px;background:#10131a;color:#e6e8ee;font-family:Segoe UI,Arial,sans-serif;z-index:9999">' +
+              '<div style="max-width:560px;background:#161b24;border:1px solid #232a38;border-radius:14px;padding:24px">' +
+              "<h2 style='margin:0 0 10px;font-size:17px'>Интерфейс не загрузился</h2>" +
+              "<p style='margin:0 0 10px;font-size:14px;color:#9aa3b2'>Окно открылось, но WebView2 не отрисовал страницу. Чаще всего виноваты устаревший WebView2 Runtime или видеодрайвер.</p>" +
+              "<ol style='margin:0 0 10px 18px;padding:0;font-size:14px;color:#c9d2e0'>" +
+              "<li>Клик правой кнопкой по иконке в трее → «Перезагрузить окно».</li>" +
+              "<li>Полностью выйдите (трей → «Выход»), обновите <b>Microsoft Edge WebView2 Runtime</b> и драйвер видеокарты, запустите снова.</li>" +
+              "<li>Если не помогло — удалите кэш WebView2: <code>%AppData%\\com.customvpn.app\\EBWebView</code> при закрытом приложении.</li>" +
+              "</ol>" +
+              "<p style='margin:0;font-size:12px;color:#64748b'>Для диагностики приложите файл %AppData%\\com.customvpn.app\\app.log</p>" +
+              "</div></div>"
+          );
+        }
+      }, 8000);
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

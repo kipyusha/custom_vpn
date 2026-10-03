@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "CustomVPN",
         "width": 1100,
         "height": 720,

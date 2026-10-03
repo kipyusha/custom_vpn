@@ -56,9 +56,11 @@ fn build_tray_menu(
     )
     .build(app)?;
     let update = MenuItemBuilder::with_id("update", "Проверить обновления").build(app)?;
+    let reload =
+        MenuItemBuilder::with_id("reload", "Перезагрузить окно").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Выход").build(app)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    Menu::with_items(app, &[&show, &connect, &update, &sep, &quit])
+    Menu::with_items(app, &[&show, &connect, &update, &reload, &sep, &quit])
 }
 
 fn toggle_main_window(app: &AppHandle) {
@@ -78,9 +80,13 @@ pub fn run() {
     // Лекарство от случайного чёрного окна: отключаем GPU-ускорение
     // WebView2 до его инициализации. Наш интерфейс лёгкий (текст/SVG),
     // программный рендеринг тянет без потерь, зато драйверы видеокарт
-    // больше не роняют рендер.
+    // больше не роняют рендер. Второй флаг чинит чёрный контент на
+    // отдельных Intel/AMD-драйверах и под RDP.
     if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
-        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu");
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--disable-gpu --disable-gpu-compositing",
+        );
     }
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -127,6 +133,16 @@ pub fn run() {
                             }
                             "update" => {
                                 let _ = app.emit("check-updates", ());
+                            }
+                            "reload" => {
+                                // Лекарство от чёрного/зависшего окна без перезапуска:
+                                // перезагружаем webview и показываем окно.
+                                if let Some(w) = app.get_webview_window("main") {
+                                    let _ = w.reload();
+                                    let _ = w.show();
+                                    let _ = w.set_focus();
+                                }
+                                sync_tray(app);
                             }
                             "quit" => {
                                 app.exit(0);
