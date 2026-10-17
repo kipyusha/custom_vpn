@@ -59,22 +59,28 @@ const ENV_KEY: &str = "Environment";
 const NO_PROXY_VAL: &str = "localhost,127.0.0.1,::1,github.com,api.github.com,objects.githubusercontent.com,release-assets.githubusercontent.com";
 
 fn broadcast_env_change() {
-    use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
-    };
-    unsafe {
-        let env_w: Vec<u16> = "Environment\0".encode_utf16().collect();
-        SendMessageTimeoutW(
-            HWND_BROADCAST,
-            WM_SETTINGCHANGE,
-            0 as WPARAM,
-            env_w.as_ptr() as LPARAM,
-            SMTO_ABORTIFHUNG,
-            2000,
-            std::ptr::null_mut(),
-        );
-    }
+    // Broadcast рассылается ВО ВСЕМ окнам системы, которые могут отвечать
+    // сколь угодно долго (например, Wallpaper Engine вешает запуск: WER
+    // фиксировал AppHang с P6=wallpaper32.exe). Поэтому уходим в фоновой
+    // поток: UI-поток больше никогда не ждёт чужие окна.
+    std::thread::spawn(|| {
+        use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+        };
+        unsafe {
+            let env_w: Vec<u16> = "Environment\0".encode_utf16().collect();
+            SendMessageTimeoutW(
+                HWND_BROADCAST as HWND,
+                WM_SETTINGCHANGE,
+                0 as WPARAM,
+                env_w.as_ptr() as LPARAM,
+                SMTO_ABORTIFHUNG,
+                10_000,
+                std::ptr::null_mut(),
+            );
+        }
+    });
 }
 
 fn open_env_key(write: bool) -> Result<RegKey, String> {
@@ -133,4 +139,25 @@ pub fn get_opencode_proxy_env_status(port: u16) -> bool {
     };
     // считаем включенным если хотя бы HTTPS_PROXY совпадает
     check("HTTPS_PROXY") && check("HTTP_PROXY")
+}
+
+/// Точное совпадение всех значений, которые пишет set_opencode_proxy_env.
+/// Нужна, чтобы не переписывать реестр и не рассылать broadcast при
+/// каждом старте приложения, когда миграция уже выполнена.
+pub fn opencode_proxy_env_matches(port: u16) -> bool {
+    let expected = format!("http://127.0.0.1:{port}");
+    let Ok(key) = open_env_key(false) else {
+        return false;
+    };
+    let check = |name: &str, expected: &str| -> bool {
+        key.get_value::<String, _>(name)
+            .map(|v| v == expected)
+            .unwrap_or(false)
+    };
+    check("HTTPS_PROXY", &expected)
+        && check("HTTP_PROXY", &expected)
+        && check("https_proxy", &expected)
+        && check("http_proxy", &expected)
+        && check("NO_PROXY", NO_PROXY_VAL)
+        && check("no_proxy", NO_PROXY_VAL)
 }

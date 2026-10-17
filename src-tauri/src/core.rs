@@ -42,7 +42,10 @@ impl Core {
         let cfg = Store::new(data_dir.clone()).load();
         // Миграция прокси-переменных: дописываем GitHub в NO_PROXY,
         // чтобы проверка обновлений ходила напрямую при выключенном VPN.
-        if crate::winutil::get_opencode_proxy_env_status(cfg.settings.mixed_port) {
+        // Пишем только если значения отличаются: на каждый запуск не
+        // нужно трогать реестр и рассылать WM_SETTINGCHANGE (это блокирующий
+        // broadcast по всем окнам — причина AppHang с Wallpaper Engine).
+        if !crate::winutil::opencode_proxy_env_matches(cfg.settings.mixed_port) {
             let _ = crate::winutil::set_opencode_proxy_env(cfg.settings.mixed_port);
         }
         let singbox = SingBox::new(
