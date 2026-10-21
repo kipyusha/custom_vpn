@@ -27,20 +27,25 @@ jobs:
 
       - run: npm ci
 
-      # Список изменений из коммитов между предыдущим и текущим тегом.
-      # Технические коммиты (бамп версии, мержи) отфильтровываются.
+      # Если есть release-notes/<tag>.md, он становится описанием релиза.
+      # Иначе список изменений собирается из коммитов между тегами.
       - name: Build release notes
         id: notes
         run: |
           $current = "${{ github.ref_name }}"
-          $prev = git tag --sort=-creatordate | Where-Object { $_ -ne $current } | Select-Object -First 1
-          if ($prev) {
-            $log = git log --pretty=format:'- %s' "$prev..$current"
+          $notesFile = "release-notes/$current.md"
+          if (Test-Path $notesFile) {
+            $body = Get-Content $notesFile -Raw
           } else {
-            $log = git log --pretty=format:'- %s' -10 $current
+            $prev = git tag --sort=-creatordate | Where-Object { $_ -ne $current } | Select-Object -First 1
+            if ($prev) {
+              $log = git log --pretty=format:'- %s' "$prev..$current"
+            } else {
+              $log = git log --pretty=format:'- %s' -10 $current
+            }
+            $log = $log | Where-Object { $_ -notmatch '^- Версия ' -and $_ -notmatch '^- Merge ' }
+            $body = "## Что нового`n`n" + ($log -join "`n")
           }
-          $log = $log | Where-Object { $_ -notmatch '^- Версия ' -and $_ -notmatch '^- Merge ' }
-          $body = "## Что нового`n`n" + ($log -join "`n")
           "body<<EOF" >> $env:GITHUB_OUTPUT
           $body >> $env:GITHUB_OUTPUT
           "EOF" >> $env:GITHUB_OUTPUT

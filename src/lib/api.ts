@@ -132,6 +132,11 @@ export const api = {
     invoke("set_custom_site", { id, enabled }),
   addCustomSiteSubdomain: (id: string, subdomain: string): Promise<void> =>
     invoke("add_custom_site_subdomain", { id, subdomain }),
+  addSiteSubdomains: (
+    kind: "preset" | "custom",
+    id: string,
+    subdomains: string[],
+  ): Promise<number> => invoke("add_site_subdomains", { kind, id, subdomains }),
   removeCustomSiteSubdomain: (id: string, subdomain: string): Promise<void> =>
     invoke("remove_custom_site_subdomain", { id, subdomain }),
   setCustomSiteIncludeSubdomains: (

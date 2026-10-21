@@ -411,6 +411,118 @@ impl Core {
         self.persist(cfg)
     }
 
+    /// Добавляет несколько доменов за один проход: одна запись в конфиг и
+    /// один перезапуск sing-box вместо серии последовательных добавлений.
+    /// Уже существующие и конфликтующие домены пропускаются.
+    pub fn add_site_subdomains(
+        &self,
+        kind: &str,
+        id: &str,
+        domains: &[String],
+    ) -> Result<usize, String> {
+        let mut cfg = self.store.load();
+        let mut added = 0usize;
+        match kind {
+            "preset" => {
+                let def = config::PRESET_SITES
+                    .iter()
+                    .find(|p| p.id == id)
+                    .ok_or("Сайт не найден")?;
+                for raw in domains {
+                    let Ok(sub) = parse_site_domain(raw) else {
+                        continue;
+                    };
+                    if def.domains.contains(&sub.as_str()) {
+                        continue;
+                    }
+                    if cfg
+                        .preset_sites
+                        .state(id)
+                        .subdomains
+                        .iter()
+                        .any(|d| d == &sub)
+                    {
+                        continue;
+                    }
+                    if cfg
+                        .custom_sites
+                        .iter()
+                        .any(|s| s.domain == sub || s.subdomains.iter().any(|d| d == &sub))
+                    {
+                        continue;
+                    }
+                    let mut duplicate = false;
+                    for ps in config::PRESET_SITES {
+                        if ps.id == id {
+                            continue;
+                        }
+                        let st = cfg.preset_sites.state(ps.id);
+                        if st.deleted {
+                            continue;
+                        }
+                        if ps.domains.contains(&sub.as_str())
+                            || st.subdomains.iter().any(|d| d == &sub)
+                        {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if duplicate {
+                        continue;
+                    }
+                    cfg.preset_sites.add_subdomain(id, sub);
+                    added += 1;
+                }
+            }
+            "custom" => {
+                if !cfg.custom_sites.iter().any(|s| s.id == id) {
+                    return Err("Сайт не найден".into());
+                }
+                for raw in domains {
+                    let Ok(sub) = parse_site_domain(raw) else {
+                        continue;
+                    };
+                    if cfg.custom_sites.iter().any(|s| {
+                        s.id != id && (s.domain == sub || s.subdomains.iter().any(|d| d == &sub))
+                    }) {
+                        continue;
+                    }
+                    let mut duplicate = false;
+                    for ps in config::PRESET_SITES {
+                        let st = cfg.preset_sites.state(ps.id);
+                        if st.deleted {
+                            continue;
+                        }
+                        if ps.domains.contains(&sub.as_str())
+                            || st.subdomains.iter().any(|d| d == &sub)
+                        {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if duplicate {
+                        continue;
+                    }
+                    let site = cfg
+                        .custom_sites
+                        .iter_mut()
+                        .find(|s| s.id == id)
+                        .ok_or("Сайт не найден")?;
+                    if sub == site.domain || site.subdomains.iter().any(|d| d == &sub) {
+                        continue;
+                    }
+                    site.subdomains.push(sub);
+                    added += 1;
+                }
+            }
+            _ => return Err("Неизвестный тип сайта".into()),
+        }
+        if added > 0 {
+            self.persist(cfg)?;
+        }
+        Ok(added)
+    }
+
     pub fn remove_custom_site_subdomain(&self, id: &str, subdomain: &str) -> Result<(), String> {
         let mut cfg = self.store.load();
         let site = cfg

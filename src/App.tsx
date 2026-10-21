@@ -5,67 +5,32 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   api,
-  formatBytes,
   type AppState,
   type ConnectionInfo,
   type PingInfo,
   type StatusInfo,
 } from "./lib/api";
-import { SpeedGraph, type Point } from "./components/SpeedGraph";
-import ghostLogo from "./assets/ghost.png";
+import type { Point } from "./components/SpeedGraph";
+import type { Tab } from "./lib/navigation";
+import type { ConnectionLogEntry, HostGroup } from "./lib/monitor";
+import { PRESET_SITES, type SiteItem } from "./lib/site";
+import { TitleBar } from "./components/TitleBar";
+import { Sidebar } from "./components/Sidebar";
+import { StatusBar } from "./components/StatusBar";
+import { HomePage } from "./components/HomePage";
+import { RulesPage } from "./components/RulesPage";
+import { RulesPanel } from "./components/RulesPanel";
+import { MonitorPage } from "./components/MonitorPage";
+import { SettingsPage } from "./components/SettingsPage";
+import { ProfileModal } from "./components/ProfileModal";
+import { SiteModal } from "./components/SiteModal";
+import { LearnDomainsModal } from "./components/LearnDomainsModal";
+import { Modal } from "./components/Modal";
+import { Icon } from "./components/icons";
 import "./App.css";
 
-type Tab = "connect" | "rules" | "monitor";
-type ProfileMode = "vless" | "json";
-
-const PRESET_SITES = [
-  { id: "youtube", label: "YouTube", url: "https://www.youtube.com/" },
-  { id: "chatgpt", label: "ChatGPT", url: "https://chatgpt.com" },
-  { id: "instagram", label: "Instagram", url: "https://www.instagram.com/" },
-  { id: "twitch", label: "Twitch", url: "https://www.twitch.tv/" },
-  { id: "opencode", label: "OpenCode / Muse Spark", url: "https://opencode.ai/" },
-];
-
-interface SiteItem {
-  kind: "preset" | "custom";
-  id: string;
-  label: string;
-  url: string;
-  enabled: boolean;
-  includeSubdomains: boolean;
-  subdomains: string[];
-  hidden: boolean;
-}
-
-function EyeIcon({ off }: { off: boolean }) {
-
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {off ? (
-        <>
-          <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-          <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-          <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
-          <line x1="2" y1="2" x2="22" y2="22" />
-        </>
-      ) : (
-        <>
-          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-          <circle cx="12" cy="12" r="3" />
-        </>
-      )}
-    </svg>
-  );
-}
+const IDLE_TIMEOUT = 10 * 1000;
+const HISTORY_LIMIT = 1800;
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -91,30 +56,10 @@ class ErrorBoundary extends Component<
     if (this.state.error) {
       const e = this.state.error;
       return (
-        <div
-          style={{
-            padding: 24,
-            color: "#fff",
-            background: "#7f1d1d",
-            minHeight: "100vh",
-            fontSize: 14,
-          }}
-        >
+        <div className="fatal-error">
           <h2>Ошибка интерфейса</h2>
           <p>{e.message}</p>
-          <pre
-            style={{
-              whiteSpace: "pre-wrap",
-              fontSize: 12,
-              maxHeight: 300,
-              overflowY: "auto",
-              background: "rgba(0,0,0,.4)",
-              padding: 10,
-              borderRadius: 8,
-            }}
-          >
-            {e.stack}
-          </pre>
+          <pre>{e.stack}</pre>
           <button
             className="btn primary"
             onClick={() => window.location.reload()}
@@ -130,8 +75,8 @@ class ErrorBoundary extends Component<
 
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
-  const [tab, setTab] = useState<Tab>("connect");
-  const [profileMode, setProfileMode] = useState<ProfileMode>("vless");
+  const [tab, setTab] = useState<Tab>("home");
+  const [profileMode, setProfileMode] = useState<"vless" | "json">("vless");
   const [vlessLink, setVlessLink] = useState("");
   const [jsonConfig, setJsonConfig] = useState("");
   const [ruleInput, setRuleInput] = useState("");
@@ -139,8 +84,9 @@ export default function App() {
   const [procInput, setProcInput] = useState("");
   const [procAction, setProcAction] = useState<"proxy" | "direct">("proxy");
   const [siteLink, setSiteLink] = useState("");
-  const [subOpen, setSubOpen] = useState<string | null>(null);
-  const [subInput, setSubInput] = useState("");
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [siteModalOpen, setSiteModalOpen] = useState(false);
+  const [learningSite, setLearningSite] = useState<SiteItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -148,43 +94,27 @@ export default function App() {
   const [history, setHistory] = useState<Point[]>([]);
   const historyRef = useRef<Point[]>([]);
   const [elapsed, setElapsed] = useState(0);
-  // Журнал соединений для вкладки мониторинга: время первого обращения + сайт.
-  // Соединение считается "живым", только если по нему был трафик
-  // за последние IDLE_TIMEOUT (браузер держит keep-alive соединения
-  // открытыми ещё долго после закрытия вкладки).
-  const IDLE_TIMEOUT = 10 * 1000;
-  const [connLog, setConnLog] = useState<
-    {
-      conn: ConnectionInfo;
-      firstSeen: number;
-      lastSeen: number;
-      live: boolean;
-      lastFlow: number;
-    }[]
-  >([]);
+  const [connLog, setConnLog] = useState<ConnectionLogEntry[]>([]);
   const [activeList, setActiveList] = useState<ConnectionInfo[]>([]);
   const [onlyVpn, setOnlyVpn] = useState(true);
   const [search, setSearch] = useState("");
-  // Обновления приложения (Tauri updater + GitHub Releases).
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const dlRef = useRef({ done: 0, total: 0 });
-  // Версия приложения для отображения в шапке.
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(Date.now());
+  const trackRef = useRef<
+    Map<string, { first: number; up: number; down: number; flow: number }>
+  >(new Map());
 
   useEffect(() => {
     getVersion()
       .then(setAppVersion)
       .catch(() => {});
   }, []);
-  // Тикающие часы, чтобы бейдж NEW гас через 5 минут без новых данных.
-  const [nowTick, setNowTick] = useState(Date.now());
-  const trackRef = useRef<
-    Map<string, { first: number; up: number; down: number; flow: number }>
-  >(new Map());
 
   const mergeConnections = useCallback(
     (list: ConnectionInfo[]) => {
@@ -216,7 +146,6 @@ export default function App() {
             lastFlow: t.flow,
           });
         }
-        // соединения, пропавшие из снимка, уже не живые
         for (const [id, e] of byId) {
           if (!liveById.has(id) && e.live) {
             byId.set(id, { ...e, live: false });
@@ -230,7 +159,7 @@ export default function App() {
         return all;
       });
     },
-    [IDLE_TIMEOUT],
+    [],
   );
 
   const clearConnLog = useCallback(() => {
@@ -239,20 +168,7 @@ export default function App() {
     setActiveList([]);
   }, []);
 
-  interface HostGroup {
-    host: string;
-    count: number;
-    firstSeen: number;
-    lastSeen: number;
-    lastFlow: number;
-    active: boolean;
-    process?: string | null;
-    viaProxy: boolean;
-    destination: string;
-  }
-
-  // Группировка записей по сайтам: один сайт — одна строка.
-  const hostGroups = useMemo(() => {
+  const hostGroups = useMemo<HostGroup[]>(() => {
     const activeHosts = new Set(activeList.map((c) => c.host));
     const q = search.trim().toLowerCase();
     const map = new Map<string, HostGroup>();
@@ -292,7 +208,6 @@ export default function App() {
     }
     const groups = [...map.values()];
     for (const g of groups) g.active = activeHosts.has(g.host);
-    // сначала активные, затем по времени последнего обращения
     groups.sort(
       (a, b) =>
         Number(b.active) - Number(a.active) || b.lastSeen - a.lastSeen,
@@ -300,38 +215,22 @@ export default function App() {
     return groups;
   }, [connLog, activeList, onlyVpn, search]);
 
-  useEffect(() => {
-    if (!state || !state.status.connected || !state.connectedSince) {
-      setElapsed(0);
-      return;
-    }
-    const tick = () =>
-      setElapsed(
-        Math.max(0, Math.floor((Date.now() - (state.connectedSince as number)) / 1000)),
-      );
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [state?.status.connected, state?.connectedSince]);
+  const pushPoint = useCallback((up: number, down: number) => {
+    const pts = [...historyRef.current, { t: Date.now(), up, down }];
+    if (pts.length > HISTORY_LIMIT) pts.splice(0, pts.length - HISTORY_LIMIT);
+    historyRef.current = pts;
+    setHistory(pts);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
       const st = await api.appState();
       setState(st);
-      if (st.traffic) {
-        pushPoint(st.traffic[0], st.traffic[1]);
-      }
+      if (st.traffic) pushPoint(st.traffic[0], st.traffic[1]);
     } catch (e) {
       setError(String(e));
     }
-  }, []);
-
-  const pushPoint = useCallback((up: number, down: number) => {
-    const pts = [...historyRef.current, { t: Date.now(), up, down }];
-    if (pts.length > 150) pts.splice(0, pts.length - 150);
-    historyRef.current = pts;
-    setHistory(pts);
-  }, []);
+  }, [pushPoint]);
 
   const refreshProxyEnv = useCallback(async () => {
     try {
@@ -345,17 +244,31 @@ export default function App() {
   }, [refreshProxyEnv]);
 
   useEffect(() => {
+    if (!state || !state.status.connected || !state.connectedSince) {
+      setElapsed(0);
+      return;
+    }
+    const tick = () =>
+      setElapsed(
+        Math.max(
+          0,
+          Math.floor((Date.now() - (state.connectedSince as number)) / 1000),
+        ),
+      );
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [state?.status.connected, state?.connectedSince]);
+
+  useEffect(() => {
     refresh();
     const unsubs = [
       api.onTraffic((up, down) => {
         pushPoint(up, down);
-        setState((s) =>
-          s ? { ...s, traffic: [up, down] } : s,
-        );
+        setState((s) => (s ? { ...s, traffic: [up, down] } : s));
       }),
       api.onStatus((status: StatusInfo) => {
         setState((s) => (s ? { ...s, status } : s));
-        // Меню трея держим в sync со статусом подключения.
         api.refreshTray().catch(() => {});
       }),
       api.onPing((ping: PingInfo) => {
@@ -370,19 +283,16 @@ export default function App() {
     };
   }, [refresh, pushPoint, mergeConnections]);
 
-  // При открытии вкладки мониторинга подтянуть текущий снимок соединений.
   useEffect(() => {
     if (tab === "monitor" && state?.status.connected) {
       api.getConnections().then(mergeConnections).catch(() => {});
     }
   }, [tab, state?.status.connected, mergeConnections]);
 
-  // После отключения активных соединений нет.
   useEffect(() => {
     if (!state?.status.connected) setActiveList([]);
   }, [state?.status.connected]);
 
-  // Обновление бейджа NEW, пока открыта вкладка мониторинга.
   useEffect(() => {
     if (tab !== "monitor") return;
     const id = setInterval(() => setNowTick(Date.now()), 10000);
@@ -402,15 +312,12 @@ export default function App() {
         setNotice("Обновлений нет — у вас последняя версия");
       }
     } catch (e) {
-      // В dev-режиме и без сети проверка недоступна — молча пропускаем,
-      // при ручной проверке показываем ошибку.
       if (manual) setError(`Проверка обновлений: ${String(e)}`);
     } finally {
       setCheckingUpdate(false);
     }
   }, []);
 
-  // Проверка обновлений при старте приложения и далее каждые 6 часов.
   useEffect(() => {
     checkForUpdates(false);
     const id = setInterval(() => checkForUpdates(false), 6 * 60 * 60 * 1000);
@@ -423,8 +330,6 @@ export default function App() {
     setUpdateProgress(0);
     setUpdateMsg(null);
     try {
-      // Отключаем VPN и прибиваем остатки sing-box, чтобы установщик
-      // не спотыкался о занятые файлы.
       try {
         await api.disconnect();
       } catch {}
@@ -453,7 +358,6 @@ export default function App() {
     }
   }, [update, refresh]);
 
-  // События от трея: проверка обновлений, сворачивание, ошибки.
   useEffect(() => {
     const unsubs = [
       api.onCheckUpdates(() => {
@@ -480,42 +384,50 @@ export default function App() {
     try {
       await fn();
       await refresh();
+      return true;
     } catch (e) {
       setError(String(e));
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
-  const saveProfile = () => {
+  const saveProfile = async () => {
     if (profileMode === "vless") {
       if (!vlessLink.trim()) {
         setError("Вставьте ссылку vless://");
         return;
       }
-      run(async () => {
+      const ok = await run(async () => {
         await api.setProfileVless(vlessLink.trim());
         setVlessLink("");
         setNotice("Профиль сохранён");
       });
+      if (ok) setProfileModalOpen(false);
     } else {
       if (!jsonConfig.trim()) {
         setError("Вставьте JSON-конфиг");
         return;
       }
-      run(async () => {
+      const ok = await run(async () => {
         await api.setProfileJson(jsonConfig.trim());
         setJsonConfig("");
         setNotice("JSON-профиль сохранён");
       });
+      if (ok) setProfileModalOpen(false);
     }
+  };
+
+  const clearProfile = async () => {
+    const ok = await run(() => api.clearProfile());
+    if (ok) setProfileModalOpen(false);
   };
 
   const onConnect = () => {
     if (state?.status.connected) {
       run(() => api.disconnect());
     } else {
-      // После подключения сеть меняется — перепроверяем обновления.
       run(async () => {
         await api.connect();
         checkForUpdates(false);
@@ -585,7 +497,19 @@ export default function App() {
     return [...presets, ...customs];
   }, [state?.presetStates, state?.customSites]);
 
-  const siteKey = (s: SiteItem) => `${s.kind}-${s.id}`;
+  const hasDeletedPresets = useMemo(
+    () => (state?.presetStates || []).some((s) => s.deleted),
+    [state?.presetStates],
+  );
+
+  const activeRulesCount = useMemo(() => {
+    if (!state) return 0;
+    return (
+      sites.filter((s) => s.enabled).length +
+      state.rules.domainProxy.length +
+      state.rules.processProxy.length
+    );
+  }, [state, sites]);
 
   const toggleSite = (s: SiteItem) => {
     run(() =>
@@ -615,33 +539,24 @@ export default function App() {
     run(() => api.setSiteHidden(s.kind, s.id, !s.hidden));
   };
 
-  const addSite = () => {
+  const addSite = async () => {
     if (!siteLink.trim()) {
       setError("Введите адрес сайта");
       return;
     }
-    run(async () => {
+    const ok = await run(async () => {
       await api.addCustomSite(siteLink.trim());
       setSiteLink("");
       setNotice("Сайт добавлен");
     });
+    if (ok) setSiteModalOpen(false);
   };
 
-  const openSubInput = (key: string) => {
-    setSubOpen(subOpen === key ? null : key);
-    setSubInput("");
-  };
-
-  const addSub = () => {
-    if (!subOpen || !subInput.trim()) return;
-    const s = sites.find((x) => siteKey(x) === subOpen);
-    if (!s) return;
-    const sd = subInput.trim();
+  const addSub = (s: SiteItem, sd: string) => {
     run(async () => {
       if (s.kind === "preset") await api.addPresetSiteSubdomain(s.id, sd);
       else await api.addCustomSiteSubdomain(s.id, sd);
-      setSubInput("");
-      setNotice(`Поддомен ${sd} добавлен`);
+      setNotice(`Домен ${sd} добавлен`);
     });
   };
 
@@ -653,12 +568,33 @@ export default function App() {
     );
   };
 
+  const addLearnedDomains = async (s: SiteItem, domains: string[]) => {
+    const unique = [
+      ...new Set(
+        domains.map((d) => d.trim().toLowerCase()).filter(Boolean),
+      ),
+    ];
+    if (unique.length === 0) return;
+    const ok = await run(async () => {
+      const added = await api.addSiteSubdomains(s.kind, s.id, unique);
+      setNotice(
+        added > 0
+          ? `Добавлено доменов: ${added}`
+          : "Новых доменов не добавлено",
+      );
+    });
+    if (ok) setLearningSite(null);
+  };
+
   const enableProxyEnv = () =>
     run(async () => {
       await api.setOpencodeProxyEnv();
       await refreshProxyEnv();
-      setNotice("Переменные HTTPS_PROXY/NO_PROXY прописаны. Перезапусти OpenCode Desktop");
+      setNotice(
+        "Переменные HTTPS_PROXY/NO_PROXY прописаны. Перезапусти OpenCode Desktop",
+      );
     });
+
   const disableProxyEnv = () =>
     run(async () => {
       await api.clearOpencodeProxyEnv();
@@ -667,12 +603,11 @@ export default function App() {
     });
 
   if (!state) {
-    return <div className="center">Загрузка…</div>;
+    return <div className="boot-screen">Загрузка…</div>;
   }
 
   const connected = state.status.connected;
-  const ping = state.ping;
-  const [upSpeed, downSpeed] = state.traffic || [0, 0];
+  const profile = state.profile;
 
   const fmtDur = (s: number) => {
     const h = Math.floor(s / 3600);
@@ -682,812 +617,268 @@ export default function App() {
     return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
   };
 
+  const protocol = profile
+    ? profile.kind === "json"
+      ? "JSON"
+      : profile.security
+        ? `VLESS · ${profile.security}`
+        : "VLESS"
+    : "—";
+
   return (
     <ErrorBoundary>
-    <div className="app">
-      <header className="header">
-        <div className="brand">
-          <img className="logo" src={ghostLogo} alt="CustomVPN" />
-          <h1>CustomVPN</h1>
-          {appVersion && (
-            <span style={{ fontSize: 12, opacity: 0.6 }}>v{appVersion}</span>
-          )}
-        </div>
-        <nav className="tabs">
-          <button
-            className={tab === "connect" ? "active" : ""}
-            onClick={() => setTab("connect")}
-          >
-            Подключение
-          </button>
-          <button
-            className={tab === "rules" ? "active" : ""}
-            onClick={() => setTab("rules")}
-          >
-            Правила
-          </button>
-          <button
-            className={tab === "monitor" ? "active" : ""}
-            onClick={() => setTab("monitor")}
-          >
-            Мониторинг
-          </button>
-        </nav>
-        <button
-          className="btn ghost"
-          onClick={() => checkForUpdates(true)}
-          disabled={checkingUpdate}
-          title="Проверить обновления"
-          style={{ position: "relative" }}
-        >
-          {checkingUpdate ? "…" : "⟳"}
-          {update && !updateDismissed && (
-            <span
-              style={{
-                position: "absolute",
-                top: -4,
-                right: -4,
-                width: 10,
-                height: 10,
-                borderRadius: "50%",
-                background: "#4ade80",
-              }}
-            />
-          )}
-        </button>
-        <div
-          className={`pill ${connected ? "on" : "off"}`}
-          title={connected ? "Подключено" : "Отключено"}
-        >
-          <span className="dot" />
-          {connected ? "ONLINE" : "OFFLINE"}
-        </div>
-      </header>
+      <div className="app-shell">
+        <TitleBar
+          version={appVersion}
+          connected={connected}
+          onOpenSettings={() => setTab("settings")}
+        />
 
-      {!state.admin && (
-        <div className="banner warn">
-          Приложение работает без прав администратора — возможны ограничения.
-        </div>
-      )}
-      {!state.binaryAvailable && (
-        <div className="banner error">
-          sing-box.exe не найден. Пересоберите приложение с бинарником.
-        </div>
-      )}
+        <div className="app-body">
+          <Sidebar tab={tab} onChange={setTab} />
 
-      {error && (
-        <div className="banner error">
-          <span>{error}</span>
-          <button onClick={() => setError(null)}>✕</button>
-        </div>
-      )}
-      {notice && (
-        <div className="banner ok">
-          <span>{notice}</span>
-          <button onClick={() => setNotice(null)}>✕</button>
-        </div>
-      )}
-      {update && !updateDismissed && updateProgress === null && (
-        <div
-          onClick={() => setUpdateDismissed(true)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,.6)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 100,
-            padding: 24,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--bg-card, #1a1f2e)",
-              border: "1px solid var(--border)",
-              borderRadius: 12,
-              padding: 24,
-              maxWidth: 480,
-              width: "100%",
-              boxShadow: "0 12px 48px rgba(0,0,0,.5)",
-            }}
-          >
-            <h2 style={{ margin: "0 0 8px" }}>Вышла новая версия</h2>
-            <p style={{ margin: "0 0 12px", opacity: 0.85 }}>
-              Доступно обновление до версии <b>{update.version}</b>.
-              Рекомендуем установить.
-            </p>
-            {update.body && (
-              <pre
-                style={{
-                  whiteSpace: "pre-wrap",
-                  fontSize: 12,
-                  maxHeight: 140,
-                  overflowY: "auto",
-                  background: "rgba(255,255,255,.05)",
-                  borderRadius: 8,
-                  padding: 10,
-                  margin: "0 0 16px",
-                }}
-              >
-                {update.body}
-              </pre>
+          <div className="workspace">
+            {(error ||
+              notice ||
+              updateProgress !== null ||
+              updateMsg ||
+              !state.admin ||
+              !state.binaryAvailable) && (
+              <div className="banner-stack">
+                {!state.admin && (
+                  <div className="banner warn">
+                    <span className="banner-icon">
+                      <Icon name="shield" size={16} />
+                    </span>
+                    <span>
+                      Приложение работает без прав администратора — возможны
+                      ограничения.
+                    </span>
+                  </div>
+                )}
+                {!state.binaryAvailable && (
+                  <div className="banner error">
+                    <span>
+                      sing-box.exe не найден. Пересоберите приложение с
+                      бинарником.
+                    </span>
+                  </div>
+                )}
+                {error && (
+                  <div className="banner error">
+                    <span>{error}</span>
+                    <button
+                      className="icon-btn"
+                      onClick={() => setError(null)}
+                      aria-label="Закрыть"
+                    >
+                      <Icon name="close" size={14} />
+                    </button>
+                  </div>
+                )}
+                {notice && (
+                  <div className="banner ok">
+                    <span>{notice}</span>
+                    <button
+                      className="icon-btn"
+                      onClick={() => setNotice(null)}
+                      aria-label="Закрыть"
+                    >
+                      <Icon name="close" size={14} />
+                    </button>
+                  </div>
+                )}
+                {updateProgress !== null && (
+                  <div className="banner ok">
+                    <span className="banner-progress">
+                      Установка обновления… {updateProgress}%
+                      <span className="progress-track">
+                        <span
+                          className="progress-fill"
+                          style={{ width: `${updateProgress}%` }}
+                        />
+                      </span>
+                    </span>
+                  </div>
+                )}
+                {updateMsg && (
+                  <div className="banner error">
+                    <span>{updateMsg}</span>
+                    <button
+                      className="icon-btn"
+                      onClick={() => setUpdateMsg(null)}
+                      aria-label="Закрыть"
+                    >
+                      <Icon name="close" size={14} />
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                className="btn ghost"
-                onClick={() => setUpdateDismissed(true)}
-              >
-                Позже
-              </button>
-              <button className="btn primary" onClick={installUpdate}>
-                Установить обновление
-              </button>
+
+            <div className="page-scroll">
+              <div className="page-shell">
+                {tab === "home" && (
+                  <div className="home-layout">
+                    <HomePage
+                      state={state}
+                      connected={connected}
+                      busy={busy}
+                      elapsed={elapsed}
+                      history={history}
+                      fmtDur={fmtDur}
+                      onConnect={onConnect}
+                      onEditProfile={() => setProfileModalOpen(true)}
+                      onOpenRules={() => setTab("rules")}
+                    />
+                    <RulesPanel
+                      sites={sites}
+                      busy={busy}
+                      onToggle={toggleSite}
+                      onAdd={() => setSiteModalOpen(true)}
+                      onOpenFull={() => setTab("rules")}
+                    />
+                  </div>
+                )}
+
+                {tab === "rules" && (
+                  <RulesPage
+                    state={state}
+                    sites={sites}
+                    busy={busy}
+                    connected={connected}
+                    hasDeletedPresets={hasDeletedPresets}
+                    onToggle={toggleSite}
+                    onToggleInclude={toggleInclude}
+                    onToggleHidden={toggleHidden}
+                    onRemove={removeSiteItem}
+                    onAddSub={addSub}
+                    onRemoveSub={removeSub}
+                    onLearn={setLearningSite}
+                    onAddSite={() => setSiteModalOpen(true)}
+                    onRestorePresets={() =>
+                      run(() => api.restorePresetSites())
+                    }
+                    ruleInput={ruleInput}
+                    setRuleInput={setRuleInput}
+                    ruleAction={ruleAction}
+                    setRuleAction={setRuleAction}
+                    onAddRule={addRule}
+                    onRemoveRule={removeRule}
+                    procInput={procInput}
+                    setProcInput={setProcInput}
+                    procAction={procAction}
+                    setProcAction={setProcAction}
+                    onAddProcess={addProcess}
+                    onRemoveProcess={removeProcess}
+                  />
+                )}
+
+                {tab === "monitor" && (
+                  <MonitorPage
+                    connected={connected}
+                    nowTick={nowTick}
+                    search={search}
+                    setSearch={setSearch}
+                    onlyVpn={onlyVpn}
+                    setOnlyVpn={setOnlyVpn}
+                    onClear={clearConnLog}
+                    activeList={activeList}
+                    hostGroups={hostGroups}
+                  />
+                )}
+
+                {tab === "settings" && (
+                  <SettingsPage
+                    state={state}
+                    appVersion={appVersion}
+                    proxyEnvOn={proxyEnvOn}
+                    busy={busy}
+                    onRefreshProxyEnv={refreshProxyEnv}
+                    onEnableProxyEnv={enableProxyEnv}
+                    onDisableProxyEnv={disableProxyEnv}
+                    onCleanupOrphans={() => run(() => api.cleanupOrphans())}
+                    onCheckUpdates={() => checkForUpdates(true)}
+                    checkingUpdate={checkingUpdate}
+                  />
+                )}
+              </div>
             </div>
           </div>
         </div>
-      )}
-      {updateProgress !== null && (
-        <div className="banner ok">
-          <span>
-            Установка обновления… {updateProgress}%
-            <span
-              style={{
-                display: "block",
-                height: 6,
-                borderRadius: 3,
-                background: "rgba(255,255,255,.15)",
-                marginTop: 6,
-                overflow: "hidden",
-              }}
-            >
-              <span
-                style={{
-                  display: "block",
-                  height: "100%",
-                  width: `${updateProgress}%`,
-                  background: "#4ade80",
-                }}
-              />
-            </span>
-          </span>
-        </div>
-      )}
-      {updateMsg && (
-        <div className="banner error">
-          <span>{updateMsg}</span>
-          <button onClick={() => setUpdateMsg(null)}>✕</button>
-        </div>
-      )}
 
-      {tab === "monitor" ? (
-        <main className="content">
-          <section className="profile-card">
-            <h2>Мониторинг трафика</h2>
-            <p className="hint">
-              {connected
-                ? "Запросы в реальном времени: время обращения и сайт. Зелёная точка — по соединению идёт трафик прямо сейчас (без трафика дольше 10 сек считается закрытым)."
-                : "Подключите VPN во вкладке «Подключение», чтобы видеть запросы в реальном времени."}
-            </p>
-            <div className="rule-form">
-              <input
-                className="input"
-                placeholder="Найти сайт или процесс…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                style={{ minWidth: 200 }}
-              />
-              <label className="sub-check">
-                <input
-                  type="checkbox"
-                  checked={onlyVpn}
-                  onChange={(e) => setOnlyVpn(e.target.checked)}
-                />
-                <span>только через VPN</span>
-              </label>
-              <button className="btn ghost" onClick={clearConnLog}>
-                Очистить журнал
-              </button>
-            </div>
-            <div style={{ fontSize: 12, opacity: 0.75, margin: "8px 0" }}>
-              Активно сейчас: {activeList.length} · Сайтов в журнале:{" "}
-              {hostGroups.length}
-            </div>
-            {(() => {
-              if (!connected && hostGroups.length === 0) {
-                return <p className="empty">Нет данных — VPN отключён</p>;
-              }
-              if (hostGroups.length === 0) {
-                return (
-                  <p className="empty">
-                    {search.trim()
-                      ? `По запросу «${search.trim()}» ничего не найдено`
-                      : onlyVpn
-                        ? "Пока нет запросов через VPN — откройте сайт из правил"
-                        : "Пока нет запросов — откройте любой сайт"}
-                  </p>
-                );
-              }
-              return (
-                <div className="rule-lists">
-                  <div className="rule-col" style={{ flex: "1 1 100%" }}>
-                    {hostGroups.map((g) => {
-                      const ageMs = nowTick - g.firstSeen;
-                      // NEW виден 5 минут: зелёный — соединение активно,
-                      // оранжевый — уже закрыто.
-                      const newTone =
-                        ageMs >= 5 * 60 * 1000
-                          ? null
-                          : g.active
-                            ? "green"
-                            : "orange";
-                      return (
-                        <div className="rule-row" key={g.host}>
-                          {newTone && (
-                            <span
-                              title={`Сайт впервые открыт ${new Date(g.firstSeen).toLocaleTimeString("ru-RU")}`}
-                              style={{
-                                fontSize: 11,
-                                fontWeight: 700,
-                                padding: "2px 6px",
-                                borderRadius: 6,
-                                flexShrink: 0,
-                                marginRight: 6,
-                                color:
-                                  newTone === "green" ? "#4ade80" : "#fb923c",
-                                background:
-                                  newTone === "green"
-                                    ? "rgba(34,197,94,.15)"
-                                    : "rgba(249,115,22,.15)",
-                                border: `1px solid ${newTone === "green" ? "rgba(34,197,94,.4)" : "rgba(249,115,22,.4)"}`,
-                              }}
-                            >
-                              NEW
-                            </span>
-                          )}
-                          <span
-                            title={`Первое: ${new Date(g.firstSeen).toLocaleString("ru-RU")}\nПоследнее: ${new Date(g.lastSeen).toLocaleString("ru-RU")}\nТрафик: ${new Date(g.lastFlow).toLocaleString("ru-RU")}`}
-                            style={{ minWidth: 70 }}
-                          >
-                            {new Date(g.lastSeen).toLocaleTimeString("ru-RU")}
-                          </span>
-                          <span
-                            title={g.destination}
-                            style={{
-                              flex: 1,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            <span
-                              style={{
-                                color: g.active
-                                  ? "#4ade80"
-                                  : "rgba(255,255,255,.3)",
-                              }}
-                            >
-                              {g.active ? "●" : "○"}
-                            </span>{" "}
-                            {g.host}
-                          </span>
-                          {g.count > 1 && (
-                            <span
-                              title={`Обращений: ${g.count}`}
-                              style={{ fontSize: 12, opacity: 0.7 }}
-                            >
-                              ×{g.count}
-                            </span>
-                          )}
-                          {g.process && (
-                            <span
-                              title={`Процесс: ${g.process}`}
-                              style={{ fontSize: 12, opacity: 0.7 }}
-                            >
-                              {g.process}
-                            </span>
-                          )}
-                          <span
-                            className={`preset-state ${g.viaProxy ? "on" : "off"}`}
-                            style={{ marginLeft: 6 }}
-                          >
-                            {g.viaProxy ? "VPN" : "напрямую"}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })()}
-          </section>
-        </main>
-      ) : tab === "connect" ? (
-        <main className="content">
-          <section className="profile-card">
-            <h2>Профиль подключения</h2>
-            {state.profile ? (
-              <div className="profile-info">
-                <div className="profile-name">{state.profile.name}</div>
-                <div className="profile-meta">
-                  {state.profile.server && <span>Сервер: {state.profile.server}</span>}
-                  {state.profile.security && (
-                    <span>Шифрование: {state.profile.security}</span>
-                  )}
-                  {state.profile.network && <span>Транспорт: {state.profile.network}</span>}
-                  {state.profile.kind === "json" && <span>JSON-конфиг</span>}
-                </div>
+        <StatusBar
+          connected={connected}
+          profileName={profile?.name ?? null}
+          server={profile?.server ?? state.status.server ?? null}
+          protocol={protocol}
+          rulesCount={activeRulesCount}
+          onOpenRules={() => setTab("rules")}
+        />
+
+        <ProfileModal
+          open={profileModalOpen}
+          onClose={() => setProfileModalOpen(false)}
+          profile={profile}
+          connected={connected}
+          busy={busy}
+          mode={profileMode}
+          setMode={setProfileMode}
+          vlessLink={vlessLink}
+          setVlessLink={setVlessLink}
+          jsonConfig={jsonConfig}
+          setJsonConfig={setJsonConfig}
+          onSave={saveProfile}
+          onClear={clearProfile}
+        />
+
+        <SiteModal
+          open={siteModalOpen}
+          onClose={() => setSiteModalOpen(false)}
+          value={siteLink}
+          setValue={setSiteLink}
+          onSubmit={addSite}
+          busy={busy}
+        />
+
+        {learningSite && (
+          <LearnDomainsModal
+            site={learningSite}
+            entries={connLog}
+            connected={connected}
+            busy={busy}
+            onClose={() => setLearningSite(null)}
+            onAdd={(domains) => addLearnedDomains(learningSite, domains)}
+          />
+        )}
+
+        <Modal
+          open={!!update && !updateDismissed && updateProgress === null}
+          onClose={() => setUpdateDismissed(true)}
+          title="Вышла новая версия"
+        >
+          {update && (
+            <>
+              <p className="modal-hint">
+                Доступно обновление до версии <b>{update.version}</b>.
+                Рекомендуем установить.
+              </p>
+              {update.body && <pre className="update-notes">{update.body}</pre>}
+              <div className="button-row end">
                 <button
                   className="btn ghost"
-                  onClick={() => run(() => api.clearProfile())}
-                  disabled={busy || connected}
+                  onClick={() => setUpdateDismissed(true)}
                 >
-                  Удалить профиль
+                  Позже
+                </button>
+                <button className="btn primary" onClick={installUpdate}>
+                  Установить обновление
                 </button>
               </div>
-            ) : (
-              <div className="profile-form">
-                <div className="mode-switch">
-                  <button
-                    className={profileMode === "vless" ? "active" : ""}
-                    onClick={() => setProfileMode("vless")}
-                  >
-                    Ссылка vless://
-                  </button>
-                  <button
-                    className={profileMode === "json" ? "active" : ""}
-                    onClick={() => setProfileMode("json")}
-                  >
-                    JSON-конфиг
-                  </button>
-                </div>
-                {profileMode === "vless" ? (
-                  <input
-                    className="input"
-                    placeholder="vless://uuid@host:port?security=reality&sni=...#Название"
-                    value={vlessLink}
-                    onChange={(e) => setVlessLink(e.target.value)}
-                  />
-                ) : (
-                  <textarea
-                    className="input mono"
-                    placeholder='{"outbounds":[...], ...}'
-                    rows={6}
-                    value={jsonConfig}
-                    onChange={(e) => setJsonConfig(e.target.value)}
-                  />
-                )}
-                <button
-                  className="btn primary"
-                  onClick={saveProfile}
-                  disabled={busy || connected}
-                >
-                  Сохранить профиль
-                </button>
-              </div>
-            )}
-          </section>
-
-          <section className="stats-grid">
-            <div className="stat-card">
-              <div className="stat-label">↓ Скачивание</div>
-              <div className="stat-value down">{formatBytes(downSpeed)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">↑ Отправка</div>
-              <div className="stat-value up">{formatBytes(upSpeed)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Пинг сервера</div>
-              <div className="stat-value">
-                {ping.serverMs != null ? `${ping.serverMs} мс` : "—"}
-              </div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Латентность (через VPN)</div>
-              <div className="stat-value">
-                {ping.latencyMs != null ? `${ping.latencyMs} мс` : "—"}
-              </div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Время работы</div>
-              <div className="stat-value">
-                {connected ? fmtDur(elapsed) : "—"}
-              </div>
-            </div>
-          </section>
-
-          <section className="graph-card">
-            <div className="graph-header">
-              <h2>Скорость</h2>
-              <span className="legend">
-                <i className="sw down" /> ↓ &nbsp;
-                <i className="sw up" /> ↑
-              </span>
-            </div>
-            <SpeedGraph points={history} />
-          </section>
-
-          <div className="connect-bar">
-            <button
-              className={`btn big ${connected ? "danger" : "primary"}`}
-              onClick={onConnect}
-              disabled={busy || !state.profile || !state.binaryAvailable}
-            >
-              {connected
-                ? "Отключить"
-                : busy
-                  ? "Подключение…"
-                  : "Подключить"}
-            </button>
-            {connected && state.status.server && (
-              <span className="server-info">
-                {state.status.profileName} · {state.status.server} ·{" "}
-                {fmtDur(elapsed)}
-              </span>
-            )}
-          </div>
-        </main>
-      ) : (
-        <main className="content">
-          <section className="profile-card">
-            <h2>Сайты</h2>
-            <p className="hint">
-              Через VPN идут только отмеченные сайты. Все остальные сайты
-              открываются напрямую, без VPN. Стандартные сайты можно удалять
-              (кнопка ✕) и возвращать кнопкой «Вернуть стандартные сайты»,
-              а также добавлять поддомены. Кнопка-глаз скрывает название и
-              адрес сайта — скрытие сохраняется до повторного нажатия.
-              Изменения применяются сразу. Для Muse Spark включи тумблер
-              <b> OpenCode / Muse Spark</b> (домен <code>opencode.ai</code>) — без
-              него трафик <code>opencode</code> идёт напрямую и будет
-              <code>403 RegionError</code>.
-            </p>
-            <div className="preset-list">
-              {sites.map((s) => {
-                const on = s.enabled;
-                const expanded = subOpen === siteKey(s);
-                return (
-                  <div className="preset-block" key={siteKey(s)}>
-                    <div className="preset-row">
-                      <div className="preset-info">
-                        <span
-                          className={`preset-name ${s.hidden ? "blur" : ""}`}
-                          title={s.hidden ? "Информация скрыта" : s.label}
-                        >
-                          {s.label}
-                        </span>
-                        <span
-                          className={`preset-url ${s.hidden ? "blur" : ""}`}
-                          title={s.hidden ? "Информация скрыта" : s.url}
-                        >
-                          {s.url}
-                        </span>
-                      </div>
-                      <div className="preset-action">
-                        <span className={`preset-state ${on ? "on" : "off"}`}>
-                          {on ? "через VPN" : "напрямую"}
-                        </span>
-                        <button
-                          className="preset-eye"
-                          title={s.hidden ? "Показать" : "Скрыть"}
-                          onClick={() => toggleHidden(s)}
-                          disabled={busy}
-                        >
-                          <EyeIcon off={s.hidden} />
-                        </button>
-                        <button
-                          className={`switch ${on ? "on" : ""}`}
-                          role="switch"
-                          aria-checked={on}
-                          onClick={() => toggleSite(s)}
-                          disabled={busy}
-                        >
-                          <span className="knob" />
-                        </button>
-                        <button
-                          className="preset-del"
-                          title={s.kind === "preset" ? "Удалить сайт" : "Удалить сайт"}
-                          onClick={() => removeSiteItem(s)}
-                          disabled={busy}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-                    <div className="preset-sub">
-                      <div className="preset-sub-row">
-                        <label className="sub-check">
-                          <input
-                            type="checkbox"
-                            checked={s.includeSubdomains}
-                            onChange={(e) =>
-                              toggleInclude(s, e.target.checked)
-                            }
-                            disabled={busy}
-                          />
-                          <span>включая поддомены</span>
-                        </label>
-                        <button
-                          className="preset-add-sub"
-                          onClick={() => openSubInput(siteKey(s))}
-                          disabled={busy}
-                        >
-                          {expanded ? "✕ закрыть" : "+ поддомен"}
-                        </button>
-                      </div>
-                      {expanded && (
-                        <div className="preset-sub-input">
-                          <input
-                            className="input"
-                            placeholder="api.example.com"
-                            value={subInput}
-                            onChange={(e) => setSubInput(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && addSub()}
-                          />
-                          <button
-                            className="btn primary"
-                            onClick={addSub}
-                            disabled={busy}
-                          >
-                            Добавить
-                          </button>
-                        </div>
-                      )}
-                      {s.subdomains.length > 0 && (
-                        <div className="preset-sub-list">
-                          {s.subdomains.map((sd) => (
-                            <span className="sub-tag" key={sd}>
-                              {sd}
-                              <button
-                                onClick={() => removeSub(s, sd)}
-                                disabled={busy}
-                                title="Удалить поддомен"
-                              >
-                                ✕
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-              {(state.presetStates || []).some((s) => s.deleted) && (
-                <button
-                  className="btn ghost"
-                  onClick={() => run(() => api.restorePresetSites())}
-                  disabled={busy}
-                >
-                  Вернуть стандартные сайты
-                </button>
-              )}
-            </div>
-
-            <div className="preset-add">
-              <input
-                className="input"
-                placeholder="https://example.com или example.com"
-                value={siteLink}
-                onChange={(e) => setSiteLink(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addSite()}
-              />
-              <button
-                className="btn primary"
-                onClick={addSite}
-                disabled={busy}
-              >
-                Добавить сайт
-              </button>
-            </div>
-
-            <div
-              style={{
-                marginTop: 16,
-                padding: 12,
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-                background: "var(--bg-subtle)",
-              }}
-            >
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                OpenCode / Muse Spark — как запустить:
-              </div>
-              <div style={{ fontSize: 13, lineHeight: 1.5, opacity: 0.85 }}>
-                1) Включи тумблер <b>OpenCode / Muse Spark</b> выше и нажми <b>Подключить</b> во вкладке Подключение.<br />
-                2) Запусти <code>opencode</code> с прокси (без TUN, только opencode идёт через VPN):
-              </div>
-              <pre
-                style={{
-                  marginTop: 8,
-                  padding: 8,
-                  background: "#111",
-                  color: "#0f0",
-                  borderRadius: 6,
-                  fontSize: 12,
-                  overflowX: "auto",
-                }}
-              >
-{`# PowerShell
-$env:HTTPS_PROXY="http://127.0.0.1:2080"; $env:HTTP_PROXY="http://127.0.0.1:2080"; $env:NO_PROXY="localhost,127.0.0.1,::1"; opencode run "привет" --model opencode/muse-spark-1.2-contributor-free
-# или батник из корня проекта:
-.\\start-opencode-proxy.bat run "привет" --model opencode/muse-spark-1.2-contributor-free`}
-              </pre>
-              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
-                Для OpenCode Desktop: нажми кнопку ниже — пропишет системные переменные <code>HTTPS_PROXY</code>/
-                <code>NO_PROXY</code> (вариант 2) автоматически.
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontSize: 12, opacity: 0.8 }}>
-                  Статус: {proxyEnvOn == null ? "…" : proxyEnvOn ? "включено ✓" : "выключено"}
-                </span>
-                {!proxyEnvOn ? (
-                  <button className="btn primary" onClick={enableProxyEnv} disabled={busy}>
-                    Включить для OpenCode Desktop
-                  </button>
-                ) : (
-                  <button className="btn ghost" onClick={disableProxyEnv} disabled={busy}>
-                    Выключить
-                  </button>
-                )}
-                <button
-                  className="btn ghost"
-                  onClick={refreshProxyEnv}
-                  disabled={busy}
-                  title="Обновить статус"
-                >
-                  Обновить
-                </button>
-              </div>
-              <div style={{ fontSize: 11, opacity: 0.6, marginTop: 6 }}>
-                Пишет в HKCU\Environment и шлёт WM_SETTINGCHANGE. Перезапусти OpenCode Desktop после включения.
-              </div>
-            </div>
-          </section>
-
-          <section className="profile-card">
-            <h2>Правила по доменам</h2>
-            <p className="hint">
-              Укажите сайт: трафик будет идти через VPN или напрямую. Правила
-              применяются при следующем подключении.
-            </p>
-            <div className="rule-form">
-              <input
-                className="input"
-                placeholder="example.com"
-                value={ruleInput}
-                onChange={(e) => setRuleInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addRule()}
-              />
-              <select
-                className="select"
-                value={ruleAction}
-                onChange={(e) =>
-                  setRuleAction(e.target.value as "proxy" | "direct")
-                }
-              >
-                <option value="proxy">Через VPN</option>
-                <option value="direct">Напрямую</option>
-              </select>
-              <button className="btn primary" onClick={addRule} disabled={busy}>
-                Добавить
-              </button>
-            </div>
-
-            <div className="rule-lists">
-              <div className="rule-col">
-                <h3>Через VPN ({state.rules.domainProxy.length})</h3>
-                {state.rules.domainProxy.length === 0 && (
-                  <p className="empty">Пока нет правил</p>
-                )}
-                {state.rules.domainProxy.map((d) => (
-                  <div className="rule-row" key={`p-${d}`}>
-                    <span>{d}</span>
-                    <button
-                      onClick={() => removeRule(d, "proxy")}
-                      disabled={busy}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <div className="rule-col">
-                <h3>Напрямую ({state.rules.domainDirect.length})</h3>
-                {state.rules.domainDirect.length === 0 && (
-                  <p className="empty">Пока нет правил</p>
-                )}
-                {state.rules.domainDirect.map((d) => (
-                  <div className="rule-row" key={`d-${d}`}>
-                    <span>{d}</span>
-                    <button
-                      onClick={() => removeRule(d, "direct")}
-                      disabled={busy}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          <section className="profile-card">
-            <h2>Приложения</h2>
-            <p className="hint">
-              Трафик указанного приложения идёт через VPN или напрямую. Имя
-              процесса можно посмотреть в Диспетчере задач (например,
-              Telegram.exe). Изменения применяются сразу.
-            </p>
-            <div className="rule-form">
-              <input
-                className="input"
-                placeholder="Telegram.exe"
-                value={procInput}
-                onChange={(e) => setProcInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addProcess()}
-              />
-              <select
-                className="select"
-                value={procAction}
-                onChange={(e) =>
-                  setProcAction(e.target.value as "proxy" | "direct")
-                }
-              >
-                <option value="proxy">Через VPN</option>
-                <option value="direct">Напрямую</option>
-              </select>
-              <button
-                className="btn primary"
-                onClick={addProcess}
-                disabled={busy}
-              >
-                Добавить
-              </button>
-            </div>
-
-            <div className="rule-lists">
-              <div className="rule-col">
-                <h3>Через VPN ({state.rules.processProxy.length})</h3>
-                {state.rules.processProxy.length === 0 && (
-                  <p className="empty">Пока нет правил</p>
-                )}
-                {state.rules.processProxy.map((n) => (
-                  <div className="rule-row" key={`pp-${n}`}>
-                    <span>{n}</span>
-                    <button
-                      onClick={() => removeProcess(n, "proxy")}
-                      disabled={busy}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <div className="rule-col">
-                <h3>Напрямую ({state.rules.processDirect.length})</h3>
-                {state.rules.processDirect.length === 0 && (
-                  <p className="empty">Пока нет правил</p>
-                )}
-                {state.rules.processDirect.map((n) => (
-                  <div className="rule-row" key={`pd-${n}`}>
-                    <span>{n}</span>
-                    <button
-                      onClick={() => removeProcess(n, "direct")}
-                      disabled={busy}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-        </main>
-      )}
-    </div>
+            </>
+          )}
+        </Modal>
+      </div>
     </ErrorBoundary>
   );
 }

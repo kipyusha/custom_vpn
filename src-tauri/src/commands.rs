@@ -181,6 +181,16 @@ pub fn add_custom_site_subdomain(
 }
 
 #[tauri::command]
+pub fn add_site_subdomains(
+    core: State<'_, Arc<Core>>,
+    kind: String,
+    id: String,
+    subdomains: Vec<String>,
+) -> Result<usize, String> {
+    core.add_site_subdomains(&kind, &id, &subdomains)
+}
+
+#[tauri::command]
 pub fn remove_custom_site_subdomain(
     core: State<'_, Arc<Core>>,
     id: String,

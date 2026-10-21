@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "@fontsource-variable/golos-text";
 import App from "./App";
 
 // Флаг для сторожа запуска в index.html: React смонтировался,

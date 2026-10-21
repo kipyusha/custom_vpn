@@ -63,13 +63,26 @@ fn build_tray_menu(
     Menu::with_items(app, &[&show, &connect, &update, &reload, &sep, &quit])
 }
 
+fn force_show_window<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>) {
+    let _ = w.unminimize();
+    let _ = w.show();
+    let _ = w.set_focus();
+}
+
+fn reveal_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        force_show_window(&w);
+    }
+    sync_tray(app);
+}
+
 fn toggle_main_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        if w.is_visible().unwrap_or(false) {
+        let minimized = w.is_minimized().unwrap_or(false);
+        if w.is_visible().unwrap_or(false) && !minimized {
             let _ = w.hide();
         } else {
-            let _ = w.show();
-            let _ = w.set_focus();
+            force_show_window(&w);
         }
     }
     sync_tray(app);
@@ -88,17 +101,28 @@ pub fn run() {
             "--disable-gpu --disable-gpu-compositing",
         );
     }
+    // Старые сборки CustomVPN используют стандартный профиль WebView2.
+    // Отдельный профиль позволяет окну открыться, даже если старая версия
+    // всё ещё висит в трее.
+    #[cfg(windows)]
+    if std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_none() {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let dir = std::path::PathBuf::from(local)
+                .join("com.customvpn.app")
+                .join("EBWebView2");
+            if std::fs::create_dir_all(&dir).is_ok() {
+                std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", dir);
+            }
+        }
+    }
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Второй запуск (например, портабл + установленная версия):
-            // вместо нового окна фокусируем уже открытое.
-            let _ = app
-                .get_webview_window("main")
-                .map(|w| { let _ = w.show(); let _ = w.set_focus(); });
-            crate::sync_tray(app);
+            // вместо нового окна показываем уже открытое.
+            reveal_main_window(app);
         }))
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -122,10 +146,7 @@ pub fn run() {
                                     if core.get_status().connected {
                                         core.disconnect(app);
                                     } else if let Err(e) = core.connect(app) {
-                                        if let Some(w) = app.get_webview_window("main") {
-                                            let _ = w.show();
-                                            let _ = w.set_focus();
-                                        }
+                                        reveal_main_window(app);
                                         let _ = app.emit("tray-error", e);
                                     }
                                 }
@@ -162,6 +183,13 @@ pub fn run() {
                     })
                     .build(app)?;
             }
+            // Если процесс запущен скрыто (bat/лаунчер), первый show может
+            // быть проигнорирован — повторяем после инициализации окна.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1200));
+                reveal_main_window(&handle);
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -195,6 +223,7 @@ pub fn run() {
             commands::remove_preset_site_subdomain,
             commands::set_site_hidden,
             commands::add_custom_site,
+            commands::add_site_subdomains,
             commands::remove_custom_site,
             commands::set_custom_site,
             commands::add_custom_site_subdomain,
@@ -213,11 +242,13 @@ pub fn run() {
     builder
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|app_handle, event| {
-            if let RunEvent::Exit = event {
+        .run(|app_handle, event| match event {
+            RunEvent::Ready => reveal_main_window(app_handle),
+            RunEvent::Exit => {
                 if let Some(core) = app_handle.try_state::<Arc<Core>>() {
                     core.disconnect(app_handle);
                 }
             }
+            _ => {}
         });
 }

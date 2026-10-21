@@ -1,14 +1,24 @@
 @echo off
 title CustomVPN
-if not exist "%~dp0CustomVPN.exe" (
+setlocal
+cd /d "%~dp0"
+
+set "APP=%~dp0CustomVPN.exe"
+if not exist "%APP%" set "APP=%~dp0..\src-tauri\target\release\custom-vpn.exe"
+
+if not exist "%APP%" (
   echo [ERROR] CustomVPN.exe not found next to this file.
   echo Make sure the archive is fully extracted before running.
   pause
   exit /b 1
 )
+
 if not exist "%~dp0sing-box.exe" (
-  echo [ERROR] sing-box.exe is missing. Re-download the archive.
-  pause
-  exit /b 1
+  if /I "%APP%"=="%~dp0CustomVPN.exe" (
+    echo [ERROR] sing-box.exe is missing. Re-download the archive.
+    pause
+    exit /b 1
+  )
 )
-start "" "%~dp0CustomVPN.exe"
+
+start "" /d "%~dp0" "%APP%"
