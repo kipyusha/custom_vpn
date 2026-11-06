@@ -11,9 +11,9 @@ import {
   type StatusInfo,
 } from "./lib/api";
 import type { Point } from "./components/SpeedGraph";
-import type { Tab } from "./lib/navigation";
+import type { RulesFocus, Tab } from "./lib/navigation";
 import type { ConnectionLogEntry, HostGroup } from "./lib/monitor";
-import { PRESET_SITES, type SiteItem } from "./lib/site";
+import { PRESET_SITES, siteDomain, type SiteItem } from "./lib/site";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
@@ -89,7 +89,9 @@ export default function App() {
   const [learningSite, setLearningSite] = useState<SiteItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [ruleFocus, setRuleFocus] = useState<RulesFocus | null>(null);
   const [busy, setBusy] = useState(false);
+  const focusTokenRef = useRef(0);
   const [proxyEnvOn, setProxyEnvOn] = useState<boolean | null>(null);
   const [history, setHistory] = useState<Point[]>([]);
   const historyRef = useRef<Point[]>([]);
@@ -115,6 +117,12 @@ export default function App() {
       .then(setAppVersion)
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!ruleFocus) return;
+    const id = window.setTimeout(() => setRuleFocus(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [ruleFocus]);
 
   const mergeConnections = useCallback(
     (list: ConnectionInfo[]) => {
@@ -393,6 +401,58 @@ export default function App() {
     }
   };
 
+  const focusRules = (focus: Omit<RulesFocus, "token">) => {
+    setTab("rules");
+    setRuleFocus({ ...focus, token: ++focusTokenRef.current });
+  };
+
+  const findSiteFocus = (
+    domain: string,
+  ): { siteKey: string; target: string; subdomain?: string } | null => {
+    for (const s of state?.customSites ?? []) {
+      const key = `custom-${s.id}`;
+      if (s.domain === domain) {
+        return { siteKey: key, target: `site:${key}` };
+      }
+      if (s.subdomains.includes(domain)) {
+        return {
+          siteKey: key,
+          target: `sub:${key}:${domain}`,
+          subdomain: domain,
+        };
+      }
+    }
+    for (const p of PRESET_SITES) {
+      const st = state?.presetStates.find((s) => s.id === p.id);
+      if (st?.deleted) continue;
+      const key = `preset-${p.id}`;
+      if (p.domains.includes(domain)) {
+        return { siteKey: key, target: `site:${key}` };
+      }
+      if (st?.subdomains.includes(domain)) {
+        return {
+          siteKey: key,
+          target: `sub:${key}:${domain}`,
+          subdomain: domain,
+        };
+      }
+    }
+    return null;
+  };
+
+  const focusExistingSite = (domain: string, noun = "Сайт") => {
+    const existing = findSiteFocus(domain);
+    if (!existing) return false;
+    setNotice(`${noun} ${domain} уже добавлен — открыт в правилах`);
+    focusRules({
+      section: "sites",
+      target: existing.target,
+      siteKey: existing.siteKey,
+      subdomain: existing.subdomain,
+    });
+    return true;
+  };
+
   const saveProfile = async () => {
     if (profileMode === "vless") {
       if (!vlessLink.trim()) {
@@ -436,8 +496,24 @@ export default function App() {
   };
 
   const addRule = () => {
-    const d = ruleInput.trim();
+    const d = ruleInput.trim().toLowerCase();
     if (!d) return;
+    const existing = state?.rules.domainProxy.includes(d)
+      ? "proxy"
+      : state?.rules.domainDirect.includes(d)
+        ? "direct"
+        : null;
+    if (existing) {
+      setRuleInput("");
+      setNotice(
+        `Домен ${d} уже добавлен (${existing === "proxy" ? "через VPN" : "напрямую"}) — открыт в правилах`,
+      );
+      focusRules({
+        section: "domains",
+        target: `domain:${existing}:${d}`,
+      });
+      return;
+    }
     run(async () => {
       await api.addDomainRule(d, ruleAction);
       setRuleInput("");
@@ -452,6 +528,22 @@ export default function App() {
   const addProcess = () => {
     const n = procInput.trim();
     if (!n) return;
+    const existing = state?.rules.processProxy.includes(n)
+      ? "proxy"
+      : state?.rules.processDirect.includes(n)
+        ? "direct"
+        : null;
+    if (existing) {
+      setProcInput("");
+      setNotice(
+        `Приложение ${n} уже добавлено (${existing === "proxy" ? "через VPN" : "напрямую"}) — открыто в правилах`,
+      );
+      focusRules({
+        section: "apps",
+        target: `process:${existing}:${n}`,
+      });
+      return;
+    }
     run(async () => {
       await api.addProcessRule(n, procAction);
       setProcInput("");
@@ -540,22 +632,54 @@ export default function App() {
   };
 
   const addSite = async () => {
-    if (!siteLink.trim()) {
+    const input = siteLink.trim();
+    if (!input) {
       setError("Введите адрес сайта");
       return;
     }
-    const ok = await run(async () => {
-      await api.addCustomSite(siteLink.trim());
+    const domain = siteDomain(input);
+    if (domain && focusExistingSite(domain)) {
+      setSiteLink("");
+      setSiteModalOpen(false);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api.addCustomSite(input);
       setSiteLink("");
       setNotice("Сайт добавлен");
-    });
-    if (ok) setSiteModalOpen(false);
+      setSiteModalOpen(false);
+    } catch (e) {
+      const msg = String(e);
+      const duplicate = msg.includes("уже добавлен") || msg.includes("уже есть");
+      if (domain && duplicate && focusExistingSite(domain)) {
+        setSiteLink("");
+        setSiteModalOpen(false);
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setBusy(false);
+    }
+    await refresh();
   };
 
   const addSub = (s: SiteItem, sd: string) => {
+    const domain = siteDomain(sd);
+    if (domain && focusExistingSite(domain, "Домен")) return;
     run(async () => {
-      if (s.kind === "preset") await api.addPresetSiteSubdomain(s.id, sd);
-      else await api.addCustomSiteSubdomain(s.id, sd);
+      try {
+        if (s.kind === "preset") await api.addPresetSiteSubdomain(s.id, sd);
+        else await api.addCustomSiteSubdomain(s.id, sd);
+      } catch (e) {
+        const msg = String(e);
+        const duplicate =
+          msg.includes("уже добавлен") || msg.includes("уже есть");
+        if (domain && duplicate && focusExistingSite(domain, "Домен")) return;
+        throw e;
+      }
       setNotice(`Домен ${sd} добавлен`);
     });
   };
@@ -716,7 +840,9 @@ export default function App() {
               </div>
             )}
 
-            <div className="page-scroll">
+            <div
+              className={`page-scroll${tab === "rules" ? " rules-scroll" : ""}`}
+            >
               <div className="page-shell">
                 {tab === "home" && (
                   <div className="home-layout">
@@ -745,6 +871,7 @@ export default function App() {
                   <RulesPage
                     state={state}
                     sites={sites}
+                    focus={ruleFocus}
                     busy={busy}
                     connected={connected}
                     hasDeletedPresets={hasDeletedPresets}

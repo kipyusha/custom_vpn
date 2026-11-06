@@ -417,6 +417,14 @@ textarea:focus-visible {
   min-height: 0;
 }
 
+.page-scroll.rules-scroll {
+  padding-top: 0;
+}
+
+.rules-scroll .page {
+  padding-top: 20px;
+}
+
 .page-shell {
   max-width: 1560px;
   margin: 0 auto;
@@ -1787,6 +1795,34 @@ code {
 
 /* ---------- rules page ---------- */
 
+.rules-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  margin: -10px 0 -4px;
+  background: linear-gradient(
+    180deg,
+    rgba(6, 10, 17, 0.96),
+    rgba(6, 10, 17, 0.88)
+  );
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+
+.rules-toolbar .segmented {
+  align-self: auto;
+}
+
+.rules-toolbar-add {
+  flex: none;
+}
+
 .segmented {
   display: inline-flex;
   align-self: flex-start;
@@ -2068,6 +2104,23 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.site-card.is-focused,
+.rule-item.is-focused,
+.sub-tag.is-focused {
+  animation: focus-flash 2.4s ease-out;
+}
+
+@keyframes focus-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(45, 212, 191, 0);
+  }
+  15%,
+  60% {
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.55);
+  }
 }
 
 /* ---------- monitor ---------- */
@@ -2945,6 +2998,10 @@ code {
 
   .page-scroll {
     padding: 16px;
+  }
+
+  .rules-scroll .page {
+    padding-top: 16px;
   }
 
   .banner-stack {

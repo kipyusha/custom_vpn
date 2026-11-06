@@ -1,11 +1,13 @@
-import { useState } from "react";
-import type { SiteItem } from "../lib/site";
+import { useEffect, useState } from "react";
+import type { RulesFocus } from "../lib/navigation";
+import { siteKey, type SiteItem } from "../lib/site";
 import { BrandTile } from "./brandIcons";
 import { Icon } from "./icons";
 import { Toggle } from "./Toggle";
 
 export function SiteCard({
   site,
+  focus,
   busy,
   connected,
   onToggle,
@@ -17,6 +19,7 @@ export function SiteCard({
   onLearn,
 }: {
   site: SiteItem;
+  focus: RulesFocus | null;
   busy: boolean;
   connected: boolean;
   onToggle: (site: SiteItem) => void;
@@ -29,6 +32,11 @@ export function SiteCard({
 }) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
+  const key = siteKey(site);
+
+  useEffect(() => {
+    if (focus?.subdomain) setOpen(true);
+  }, [focus]);
 
   const add = () => {
     const value = input.trim();
@@ -38,7 +46,7 @@ export function SiteCard({
   };
 
   return (
-    <article className="site-card">
+    <article className="site-card" data-focus={`site:${key}`}>
       <div className="site-card-main">
         <BrandTile
           id={site.id}
@@ -123,7 +131,11 @@ export function SiteCard({
           {site.subdomains.length > 0 && (
             <div className="sub-tags">
               {site.subdomains.map((subdomain) => (
-                <span className="sub-tag" key={subdomain}>
+                <span
+                  className="sub-tag"
+                  key={subdomain}
+                  data-focus={`sub:${key}:${subdomain}`}
+                >
                   <span className={site.hidden ? "blurred" : ""}>
                     {subdomain}
                   </span>
